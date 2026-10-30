@@ -131,11 +131,12 @@ struct NetworkArchitecture {
 
         fc_2.propagate(buffer.concat_buffer, buffer.fc_2_out);
 
-        // A second linear output on the inputs of fc_2
+        // A second linear output on the inputs of fc_2. Some architectures interleave
+        // concat_buffer, so look up each input where fc_2 expects it.
         static_assert(std::size(RiskWeights) == FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2);
         i32 risk = RiskBias;
         for (IndexType i = 0; i < std::size(RiskWeights); ++i)
-            risk += RiskWeights[i] * buffer.concat_buffer[i];
+            risk += RiskWeights[i] * buffer.concat_buffer[decltype(fc_2)::get_weight_index(i)];
 
         static_assert(FC_0_OUTPUTS >= 2);
         i32 fwdOut = buffer.fc_2_out[0];
