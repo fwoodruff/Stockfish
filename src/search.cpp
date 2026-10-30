@@ -94,11 +94,11 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // optimized for require verifications at longer time controls.
 
 // Tuning only: futility margin parameters for an SPSA session
-int futilityMultBase = 45, corrDivisor = 198435, riskScale = 64;
+int futilityMultBase = 45, corrScale = 64, riskScale = 0;
 TUNE(SetRange(25, 65),
      futilityMultBase,
-     SetRange(100000, 400000),
-     corrDivisor,
+     SetRange(-64, 192),
+     corrScale,
      SetRange(-128, 192),
      riskScale);
 
@@ -1043,9 +1043,10 @@ Value Search::Worker::search(
         Value futilityMult = std::min(futilityMultBase + depth * 4, 85);
         futilityMult -= 20 * !ss->ttHit;
 
-        Value futilityMargin =
-          futilityMult * depth - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
-          + std::abs(correctionValue) / corrDivisor + std::clamp(risk, -64, 128) * riskScale / 64;
+        Value futilityMargin = futilityMult * depth
+                             - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
+                             + int(std::abs(i64(correctionValue)) * corrScale / (198435 * 64))
+                             + std::clamp(risk, -64, 128) * riskScale / 64;
 
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
