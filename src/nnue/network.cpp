@@ -217,6 +217,27 @@ void Network::verify(const std::function<void(std::string_view)>& f,
 }
 
 
+usize Network::penultimate(const Position&    pos,
+                           AccumulatorStack&  accumulatorStack,
+                           AccumulatorCaches& cache,
+                           int*               out) const {
+
+    constexpr u64 alignment = CacheLineSize;
+
+    alignas(alignment) TransformedFeatureType transformedFeatures[FeatureTransformer::BufferSize];
+
+    NNZInfo<L1> nnzInfo;
+
+    const int   pcBucket    = (pos.count<ALL_PIECES>() - 1) / 4;
+    const Color stm         = pos.side_to_move();
+    const int   queenBucket = (pos.pieces(stm, QUEEN) ? 2 : 0) | (pos.pieces(~stm, QUEEN) ? 1 : 0);
+    const int   bucket      = pcBucket * 4 + queenBucket;
+
+    featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, nnzInfo);
+    network[bucket].propagate(transformedFeatures, nnzInfo, out);
+    return bucket;
+}
+
 NnueEvalTrace Network::trace_evaluate(const Position&    pos,
                                       AccumulatorStack&  accumulatorStack,
                                       AccumulatorCaches& cache) const {

@@ -333,6 +333,16 @@ void Engine::features() const {
     sync_cout << Eval::features(p, *network) << sync_endl;
 }
 
+void Engine::activations() const {
+    StateListPtr states_(new std::deque<StateInfo>(1));
+    Position     p;
+    p.set(pos.fen(), options["UCI_Chess960"], &states_->back());
+
+    verify_network();
+
+    sync_cout << Eval::activations(p, *network) << sync_endl;
+}
+
 const OptionsMap& Engine::get_options() const { return options; }
 OptionsMap&       Engine::get_options() { return options; }
 

@@ -164,4 +164,23 @@ std::string Eval::features(Position& pos, const Eval::NNUE::Network& network) {
     return ss.str();
 }
 
+// Research only: "acts <bucket> <v0,...,v127>", the inputs to the final layer of the head in use
+std::string Eval::activations(Position& pos, const Eval::NNUE::Network& network) {
+
+    if (pos.checkers())
+        return "acts none";
+
+    auto accumulators = std::make_unique<Eval::NNUE::AccumulatorStack>();
+    auto caches       = std::make_unique<Eval::NNUE::AccumulatorCaches>(network);
+
+    int  out[Eval::NNUE::NetworkArchitecture::PenultimateSize];
+    auto bucket = network.penultimate(pos, *accumulators, *caches, out);
+
+    std::stringstream ss;
+    ss << "acts " << bucket << " ";
+    for (usize i = 0; i < Eval::NNUE::NetworkArchitecture::PenultimateSize; ++i)
+        ss << (i ? "," : "") << out[i];
+    return ss.str();
+}
+
 }  // namespace Stockfish

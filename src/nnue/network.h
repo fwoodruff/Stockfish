@@ -72,6 +72,12 @@ class Network {
                 const EvalFile&                              evalFile,
                 std::filesystem::path                        evalfilePath) const;
 
+    // Research only: inputs to the final layer of the head in use; returns the bucket
+    usize penultimate(const Position&    pos,
+                      AccumulatorStack&  accumulatorStack,
+                      AccumulatorCaches& cache,
+                      int*               out) const;
+
     NnueEvalTrace trace_evaluate(const Position&    pos,
                                  AccumulatorStack&  accumulatorStack,
                                  AccumulatorCaches& cache) const;

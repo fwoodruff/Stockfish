@@ -103,6 +103,7 @@ class Engine {
 
     void trace_eval() const;
     void features() const;
+    void activations() const;
 
     const OptionsMap& get_options() const;
     OptionsMap&       get_options();

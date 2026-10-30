@@ -92,8 +92,12 @@ struct NetworkArchitecture {
             && fc_2.write_parameters(stream);
     }
 
+    // Research only: number of inputs to fc_2, which `penultimate` receives a copy of
+    static constexpr IndexType PenultimateSize = FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2;
+
     i32 propagate(const TransformedFeatureType* transformedFeatures,
-                  const NNZInfo<L1>&            nnzInfo) const {
+                  const NNZInfo<L1>&            nnzInfo,
+                  int*                          penultimate = nullptr) const {
         struct alignas(CacheLineSize) Buffer {
             alignas(CacheLineSize) typename decltype(fc_0)::OutputBuffer fc_0_out;
             alignas(CacheLineSize) typename decltype(ac_sqr_0)::OutputType
@@ -123,6 +127,10 @@ struct NetworkArchitecture {
 #endif
 
         fc_2.propagate(buffer.concat_buffer, buffer.fc_2_out);
+
+        if (penultimate)
+            for (IndexType i = 0; i < PenultimateSize; ++i)
+                penultimate[i] = buffer.concat_buffer[i];
 
         static_assert(FC_0_OUTPUTS >= 2);
         i32 fwdOut = buffer.fc_2_out[0];

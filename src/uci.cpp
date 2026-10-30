@@ -163,6 +163,8 @@ void UCIEngine::loop() {
             engine.trace_eval();
         else if (token == "features")
             engine.features();
+        else if (token == "acts")
+            engine.activations();
         else if (token == "compiler")
             sync_cout << compiler_info() << sync_endl;
         else if (token == "export_net")
