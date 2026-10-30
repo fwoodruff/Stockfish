@@ -138,9 +138,9 @@ bool Network::save(const EvalFile& evalFile, const std::optional<fs::path>& file
     return saved;
 }
 
-Value Network::evaluate(const Position&    pos,
-                        AccumulatorStack&  accumulatorStack,
-                        AccumulatorCaches& cache) const {
+Network::Output Network::evaluate(const Position&    pos,
+                                  AccumulatorStack&  accumulatorStack,
+                                  AccumulatorCaches& cache) const {
 
     constexpr u64 alignment = CacheLineSize;
 
@@ -156,8 +156,8 @@ Value Network::evaluate(const Position&    pos,
     const int   bucket      = pcBucket * 4 + queenBucket;
 
     featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, nnzInfo);
-    const auto positional = network[bucket].propagate(transformedFeatures, nnzInfo);
-    return static_cast<Value>(positional / OutputScale);
+    const auto [positional, risk] = network[bucket].propagate(transformedFeatures, nnzInfo);
+    return {static_cast<Value>(positional / OutputScale), risk};
 }
 
 
@@ -227,7 +227,7 @@ NnueEvalTrace Network::trace_evaluate(const Position&    pos,
 
     for (IndexType b = 0; b < LayerStacks; ++b)
     {
-        const auto positional = network[b].propagate(transformedFeatures, nnzInfo);
+        const auto positional = network[b].propagate(transformedFeatures, nnzInfo).positional;
         t.positional[b]       = static_cast<Value>(positional / OutputScale);
     }
 
