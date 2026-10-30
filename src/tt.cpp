@@ -31,6 +31,7 @@
 #include "misc.h"
 #include "syzygy/tbprobe.h"
 #include "thread.h"
+#include "tune.h"
 
 namespace Stockfish {
 
@@ -41,7 +42,8 @@ namespace Stockfish {
 // depth       8 bit
 // pv node     1 bit
 // bound type  2 bit
-// generation  5 bit
+// risky       1 bit
+// generation  4 bit
 // move       16 bit
 // value      16 bit
 // evaluation 16 bit
@@ -54,9 +56,15 @@ namespace Stockfish {
 //
 // Pv, bound and generation are packed in a single byte.
 
-static constexpr u8 GENERATION_BITS = 5;
+// Replacement bonus for entries flagged as high variance, in plies (0 = off)
+int ttRiskBonus = 0;
+TUNE(SetRange(-8, 24), ttRiskBonus);
+
+static constexpr u8 GENERATION_BITS = 4;
 static constexpr u8 GENERATION_MASK = (1 << GENERATION_BITS) - 1;
-static constexpr u8 BOUND_SHIFT     = GENERATION_BITS;
+static constexpr u8 RISKY_SHIFT     = GENERATION_BITS;
+static constexpr u8 RISKY_MASK      = 1 << RISKY_SHIFT;
+static constexpr u8 BOUND_SHIFT     = RISKY_SHIFT + 1;
 static constexpr u8 BOUND_MASK      = 0b11 << BOUND_SHIFT;
 static constexpr u8 PV_SHIFT        = BOUND_SHIFT + 2;
 static constexpr u8 PV_MASK         = 1 << PV_SHIFT;
@@ -71,7 +79,8 @@ struct TTEntry {
                       Value(eval16),
                       Depth(DEPTH_NONE + depth8),
                       Bound((genBound8 & BOUND_MASK) >> BOUND_SHIFT),
-                      bool(genBound8 & PV_MASK)};
+                      bool(genBound8 & PV_MASK),
+                      bool(genBound8 & RISKY_MASK)};
     }
 
     // Check if the TT entry is occupied
@@ -114,7 +123,7 @@ static_assert(sizeof(Cluster) == 32, "Suboptimal Cluster size");
 // types to internal bitfields.
 constexpr u64 MASK21 = (1ULL << KeyBits) - 1;
 void          TTWriter::write(
-  Key k, Value v, bool pv, Bound b, Depth d, Move m, Value ev, u8 curr_generation) {
+  Key k, Value v, bool pv, Bound b, Depth d, Move m, Value ev, u8 curr_generation, bool risky) {
 
     u64        keys  = cluster->keys;
     const auto key21 = keys >> KeyBits * index & MASK21;
@@ -134,11 +143,12 @@ void          TTWriter::write(
 
         keys &= ~(MASK21 << (KeyBits * index));
         keys |= (k & MASK21) << (KeyBits * index);
-        cluster->keys   = keys;
-        entry.depth8    = u8(d - DEPTH_NONE);
-        entry.genBound8 = u8(curr_generation | b << BOUND_SHIFT | u8(pv) << PV_SHIFT);
-        entry.value16   = i16(v);
-        entry.eval16    = i16(ev);
+        cluster->keys = keys;
+        entry.depth8  = u8(d - DEPTH_NONE);
+        entry.genBound8 =
+          u8(curr_generation | u8(risky) << RISKY_SHIFT | b << BOUND_SHIFT | u8(pv) << PV_SHIFT);
+        entry.value16 = i16(v);
+        entry.eval16  = i16(ev);
     }
 
     // Secondary aging. Important for elementary mate finding.
@@ -291,14 +301,19 @@ std::tuple<bool, TTData, TTWriter> TranspositionTable::probe(const Key key) cons
         return {tte[i].is_occupied(), tte[i].read(), TTWriter(cluster, i)};
     }
 
-    // Find an entry to be replaced according to the replacement strategy
+    // Find an entry to be replaced according to the replacement strategy. Entries whose
+    // static eval was flagged as high variance are worth ttRiskBonus extra plies.
+    auto worth = [&](const TTEntry& e) {
+        return e.depth8 - 8 * e.relative_age(generation8)
+             + ttRiskBonus * bool(e.genBound8 & RISKY_MASK);
+    };
     int replace = 0;
     for (int i = 1; i < ClusterSize; ++i)
-        if (tte[replace].depth8 - 8 * tte[replace].relative_age(generation8)
-            > tte[i].depth8 - 8 * tte[i].relative_age(generation8))
+        if (worth(tte[replace]) > worth(tte[i]))
             replace = i;
 
-    return {false, TTData{Move::none(), VALUE_NONE, VALUE_NONE, DEPTH_NONE, BOUND_NONE, false},
+    return {false,
+            TTData{Move::none(), VALUE_NONE, VALUE_NONE, DEPTH_NONE, BOUND_NONE, false, false},
             TTWriter(cluster, replace)};
 }
 

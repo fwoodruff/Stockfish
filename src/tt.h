@@ -49,17 +49,19 @@ struct TTData {
     Depth depth;
     Bound bound;
     bool  is_pv;
+    bool  risky;  // the static eval was flagged as high variance when this entry was written
 
     TTData() = delete;
 
     // clang-format off
-    TTData(Move m, Value v, Value ev, Depth d, Bound b, bool pv) :
+    TTData(Move m, Value v, Value ev, Depth d, Bound b, bool pv, bool r) :
         move(m),
         value(v),
         eval(ev),
         depth(d),
         bound(b),
-        is_pv(pv) {}
+        is_pv(pv),
+        risky(r) {}
     // clang-format on
 };
 
@@ -69,7 +71,8 @@ struct TTData {
 // important than the old.
 struct TTWriter {
    public:
-    void write(Key k, Value v, bool pv, Bound b, Depth d, Move m, Value ev, u8 generation8);
+    void
+    write(Key k, Value v, bool pv, Bound b, Depth d, Move m, Value ev, u8 generation8, bool risky);
     void penalize(int penalty);  // decrement stored depth by the penalty
 
    private:

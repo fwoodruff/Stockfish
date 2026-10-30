@@ -131,6 +131,7 @@ struct Stack {
     int                         cutoffCnt;
     int                         reduction;
     int                         priorNMPFailHigh;
+    bool                        risky;
 };
 
 

@@ -93,6 +93,11 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
+// Eval risk (up + down, 64 per standard deviation each) above which a position is flagged
+// as high variance in the transposition table
+int ttRiskThreshold = 128;
+TUNE(SetRange(-128, 512), ttRiskThreshold);
+
 // Late move reduction terms for the eval risk outputs, in 1/1024 ply per standard deviation
 // of the risk. Tunable; 0 leaves the search unchanged.
 int lmrUp = 0, lmrDown = 0;
@@ -853,6 +858,9 @@ Value Search::Worker::search(
     Value unadjustedStaticEval = VALUE_NONE;
     int   down = 0, up = 0;  // eval risk, only known with a fresh evaluation
 
+    if (!excludedMove)
+        ss->risky = ss->ttHit && ttData.risky;
+
     // Skip early pruning when in check
     if (ss->inCheck)
         ss->staticEval = eval = (ss - 2)->staticEval;
@@ -868,6 +876,7 @@ Value Search::Worker::search(
             unadjustedStaticEval  = evaluation.value;
             down                  = evaluation.down;
             up                    = evaluation.up;
+            ss->risky             = up + down > ttRiskThreshold;
         }
 
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
@@ -883,11 +892,12 @@ Value Search::Worker::search(
         unadjustedStaticEval  = evaluation.value;
         down                  = evaluation.down;
         up                    = evaluation.up;
+        ss->risky             = up + down > ttRiskThreshold;
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // Static evaluation is saved as it was before adjustment by correction history
         ttWriter.write(posKey, VALUE_NONE, ss->ttPv, BOUND_NONE, DEPTH_UNSEARCHED, Move::none(),
-                       unadjustedStaticEval, tt.generation());
+                       unadjustedStaticEval, tt.generation(), ss->risky);
     }
 
     // Set up the improving flag, which is true if current static evaluation is
@@ -998,7 +1008,7 @@ Value Search::Worker::search(
                 {
                     ttWriter.write(posKey, value_to_tt(value, ss->ply), ss->ttPv, b,
                                    std::min(MAX_PLY - 1, depth + 6), Move::none(), VALUE_NONE,
-                                   tt.generation());
+                                   tt.generation(), ss->risky);
 
                     return value;
                 }
@@ -1138,7 +1148,8 @@ Value Search::Worker::search(
             {
                 // Save ProbCut data into transposition table
                 ttWriter.write(posKey, value_to_tt(value, ss->ply), ss->ttPv, BOUND_LOWER,
-                               probCutDepth + 1, move, unadjustedStaticEval, tt.generation());
+                               probCutDepth + 1, move, unadjustedStaticEval, tt.generation(),
+                               ss->risky);
 
                 if (!is_decisive(value))
                     return value - (probCutBeta - beta);
@@ -1677,7 +1688,7 @@ moves_loop:  // When in check, search starts here
                        : PvNode && bestMove ? BOUND_EXACT
                                             : BOUND_UPPER,
                        moveCount != 0 ? depth : std::min(MAX_PLY - 1, depth + 6), bestMove,
-                       unadjustedStaticEval, tt.generation());
+                       unadjustedStaticEval, tt.generation(), ss->risky);
 
     // Adjust correction history if the best move is not a capture and
     // the error direction matches whether we are above/below bounds.
@@ -1765,6 +1776,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
     // Step 4. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
+    ss->risky                  = ss->ttHit && ttData.risky;
     if (ss->inCheck)
         bestValue = futilityBase = -VALUE_INFINITE;
     else
@@ -1777,7 +1789,11 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             unadjustedStaticEval = ttData.eval;
 
             if (!is_valid(unadjustedStaticEval))
-                unadjustedStaticEval = evaluate(pos).value;
+            {
+                const auto evaluation = evaluate(pos);
+                unadjustedStaticEval  = evaluation.value;
+                ss->risky             = evaluation.up + evaluation.down > ttRiskThreshold;
+            }
 
             ss->staticEval = bestValue =
               to_corrected_static_eval(unadjustedStaticEval, correctionValue);
@@ -1789,8 +1805,10 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         }
         else
         {
-            unadjustedStaticEval = evaluate(pos).value;
-            ss->staticEval       = bestValue =
+            const auto evaluation = evaluate(pos);
+            unadjustedStaticEval  = evaluation.value;
+            ss->risky             = evaluation.up + evaluation.down > ttRiskThreshold;
+            ss->staticEval        = bestValue =
               to_corrected_static_eval(unadjustedStaticEval, correctionValue);
         }
 
@@ -1802,7 +1820,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
             if (!ss->ttHit)
                 ttWriter.write(posKey, VALUE_NONE, false, BOUND_LOWER, DEPTH_UNSEARCHED,
-                               Move::none(), unadjustedStaticEval, tt.generation());
+                               Move::none(), unadjustedStaticEval, tt.generation(), ss->risky);
             return bestValue;
         }
 
@@ -1925,7 +1943,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // is saved as it was before adjustment by correction history.
     ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), pvHit,
                    bestValue >= beta ? BOUND_LOWER : BOUND_UPPER, DEPTH_QS, bestMove,
-                   unadjustedStaticEval, tt.generation());
+                   unadjustedStaticEval, tt.generation(), ss->risky);
 
     // The search is now complete
     assert(-VALUE_INFINITE < bestValue && bestValue < VALUE_INFINITE);
