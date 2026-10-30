@@ -19,6 +19,10 @@ def main():
     ap.add_argument("--train", required=True)
     ap.add_argument("--test", required=True)
     ap.add_argument("--acts", required=True)
+    ap.add_argument("--min-bucket", type=int, default=1000,
+                    help="buckets with fewer training samples use the shared weights only (huge = shared only)")
+    ap.add_argument("--clamp", type=int, nargs=2, default=[-128, 256])
+    ap.add_argument("--scales", type=float, nargs="+", default=[0.5, 1.0, 2.0, 4.0])
     a = ap.parse_args()
 
     acts = np.load(a.acts)
@@ -29,8 +33,10 @@ def main():
     te, Xte, bte = V.attach(te, acts)
 
     y = V.TARGETS["down"](tr.err_static.values)
-    _, lp, lb = V.choose_lams(Xtr, btr, y, tr.book_idx.values)
-    h = V.VarianceHead(lp, lb, 1000).fit(Xtr, btr, y)
+    cv, lp, lb = V.choose_lams(Xtr, btr, y, tr.book_idx.values, min_bucket=a.min_bucket)
+    h = V.VarianceHead(lp, lb, a.min_bucket).fit(Xtr, btr, y)
+    yte = V.TARGETS["down"](te.err_static.values)
+    print(f"head: {len(h.per)} per-bucket corrections, CV R^2 {cv:.3f}, test R^2 {V.r2(yte, h.predict(Xte, bte)):.3f}")
     ptr = h.predict(Xtr, btr)
     te["risk"] = np.round((h.predict(Xte, bte) - ptr.mean()) / ptr.std() * 64)
 
@@ -41,7 +47,7 @@ def main():
     static = n.s_static.values
     beta = n.s_beta.values
     wrong = (n.deep_cp.values < n.s_beta_cp.values)
-    risk = np.clip(n.risk.values, -128, 256)
+    risk = np.clip(n.risk.values, *a.clamp)
     # In the engine, risk is 0 at TT hits (no fresh evaluation)
     risk_eff = np.where(n.s_tthit.values == 1, 0, risk)
     cand = static >= beta
@@ -55,7 +61,7 @@ def main():
     p0, w0 = rule(0)
     print(f"\nmaster rule:              prunes {p0:6d}  wrong {w0:5d}  wrong rate {w0 / p0:.4f}")
     print(f"\n{'risk scale':>10} {'prunes':>8} {'wrong':>6} {'rate':>7} | matched to master's prune count: {'offset':>7} {'prunes':>7} {'wrong':>6} {'vs master':>9}")
-    for k in (0.5, 2.0, 4.0, 8.0, 16.0):
+    for k in a.scales:
         extra = (risk_eff * k).astype(int)
         p, w = rule(extra)
         # shift a constant offset so the number of prunes matches master; compare wrong prunes
@@ -73,7 +79,8 @@ def main():
     rng = np.random.default_rng(0)
     g = n.book_idx.values
     ug, inv = np.unique(g, return_inverse=True)
-    extra = (risk_eff * 0.5).astype(int)
+    kb = a.scales[len(a.scales) // 2]
+    extra = (risk_eff * kb).astype(int)
     diffs = []
     for _ in range(300):
         pick = rng.integers(0, len(ug), len(ug))
@@ -91,7 +98,7 @@ def main():
         pr = cand & (static - (base_margin + extra + hi) >= beta)
         diffs.append(((pr & wrong).astype(int) @ wts - W0) / W0)
     lo5, med, hi95 = np.percentile(diffs, [5, 50, 95])
-    print(f"\nk=0.5 (the engine's /2), matched prune count: change in wrong prunes {100 * med:+.1f}% "
+    print(f"\nk={kb}, matched prune count: change in wrong prunes {100 * med:+.1f}% "
           f"[90% interval {100 * lo5:+.1f}%, {100 * hi95:+.1f}%] (bootstrap over searches)")
 
 
