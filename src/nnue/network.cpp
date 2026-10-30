@@ -156,8 +156,8 @@ Network::Output Network::evaluate(const Position&    pos,
     const int   bucket      = pcBucket * 4 + queenBucket;
 
     featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, nnzInfo);
-    const auto [positional, risk] = network[bucket].propagate(transformedFeatures, nnzInfo);
-    return {static_cast<Value>(positional / OutputScale), risk};
+    const auto [positional, upside] = network[bucket].propagate(transformedFeatures, nnzInfo);
+    return {static_cast<Value>(positional / OutputScale), upside};
 }
 
 

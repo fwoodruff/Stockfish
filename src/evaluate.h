@@ -43,10 +43,10 @@ class AccumulatorStack;
 
 std::string trace(Position& pos, const Eval::NNUE::Network& network);
 
-// The static evaluation, and the risk that it overestimates the position
+// The static evaluation, and how likely it is to underestimate the position
 struct Evaluation {
     Value value;
-    int   risk;
+    int   upside;
 };
 
 Evaluation evaluate(const NNUE::Network&           network,

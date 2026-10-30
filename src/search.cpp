@@ -845,7 +845,7 @@ Value Search::Worker::search(
 
     // Step 5. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
-    int   risk                 = 0;  // only known with a fresh evaluation
+    int   upside               = 0;  // only known with a fresh evaluation
 
     // Skip early pruning when in check
     if (ss->inCheck)
@@ -860,7 +860,7 @@ Value Search::Worker::search(
         {
             const auto evaluation = evaluate(pos);
             unadjustedStaticEval  = evaluation.value;
-            risk                  = evaluation.risk;
+            upside                = evaluation.upside;
         }
 
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
@@ -874,7 +874,7 @@ Value Search::Worker::search(
     {
         const auto evaluation = evaluate(pos);
         unadjustedStaticEval  = evaluation.value;
-        risk                  = evaluation.risk;
+        upside                = evaluation.upside;
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // Static evaluation is saved as it was before adjustment by correction history
@@ -1035,7 +1035,7 @@ Value Search::Worker::search(
 
         Value futilityMargin = futilityMult * depth
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
-                             + std::abs(correctionValue) / 198435 + std::clamp(risk, -64, 128);
+                             + std::abs(correctionValue) / 198435;
 
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
@@ -1248,8 +1248,9 @@ moves_loop:  // When in check, search starts here
                 // (*Scaler): Generally, lower divisors scale well
                 lmrDepth += history / lmr_divisor(depth);
 
-                Value futilityValue =
-                  ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
+                Value futilityValue = ss->staticEval + 119 * lmrDepth
+                                    + 90 * (ss->staticEval > alpha) + 164
+                                    + std::clamp(upside, -64, 128) / 2;
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well

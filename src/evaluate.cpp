@@ -52,8 +52,8 @@ Eval::Evaluation Eval::evaluate(const Eval::NNUE::Network&     network,
                                 int                            optimism) {
 
     assert(!pos.checkers());
-    const auto [nnue, risk] = network.evaluate(pos, accumulators, caches);
-    return {scale_evaluation(nnue, optimism, pos), risk};
+    const auto [nnue, upside] = network.evaluate(pos, accumulators, caches);
+    return {scale_evaluation(nnue, optimism, pos), upside};
 }
 
 // Applies search-dependent scaling (optimism and rule50) to the raw NNUE eval
