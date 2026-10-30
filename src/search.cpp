@@ -99,7 +99,7 @@ TUNE(SetRange(25, 65),
      futilityMultBase,
      SetRange(100000, 400000),
      corrDivisor,
-     SetRange(0, 192),
+     SetRange(-128, 192),
      riskScale);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
