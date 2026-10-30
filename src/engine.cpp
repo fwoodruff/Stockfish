@@ -128,6 +128,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("HeadExtra", Option(0, 0, 3));
     options.add("ResearchStats", Option(false));
 
+    // Research only: print every outermost singular extension verification search
+    options.add("SampleSingular", Option(false));
+
     options.add(  //
       "SyzygyPath", Option("", [](const Option& o) {
           Tablebases::init(o);

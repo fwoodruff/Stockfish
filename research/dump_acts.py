@@ -47,7 +47,7 @@ def main():
         with open(f) as fh:
             for line in fh:
                 r = json.loads(line)
-                if not r.get("meta"):
+                if not r.get("meta") and "fen" in r:
                     fens.add(r["fen"])
     fens = sorted(fens)
     chunks = [fens[i::a.workers * 4] for i in range(a.workers * 4)]

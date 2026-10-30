@@ -383,6 +383,8 @@ class Worker {
     int                sampleEvery = 0;
     int                headExtra   = 0;
     bool               researchStats = false;
+    bool               sampleSingular = false;
+    int                singularNesting = 0;
     u64                sampleRng   = 0;
 
     Value optimism[COLOR_NB];

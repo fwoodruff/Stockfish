@@ -288,6 +288,8 @@ bool Search::Worker::iterative_deepening() {
     sampleEvery   = int(options["SampleNodes"]);
     headExtra     = int(options["HeadExtra"]);
     researchStats = bool(options["ResearchStats"]);
+    sampleSingular  = bool(options["SampleSingular"]);
+    singularNesting = 0;
     sampleRng   = 0x9E3779B97F4A7C15ULL + threadIdx;
 
     RootPVMoves lastBestMovePV;
@@ -1324,9 +1326,24 @@ moves_loop:  // When in check, search starts here
             Value singularBeta  = ttData.value - (59 + 66 * (ss->ttPv && !PvNode)) * depth / 63;
             Depth singularDepth = newDepth / 2;
 
+            const u64 nodesBefore = u64(nodes);
+            ++singularNesting;
             ss->excludedMove = move;
             value = search<NonPV>(pos, ss, singularBeta - 1, singularBeta, singularDepth, cutNode);
             ss->excludedMove = Move::none();
+            --singularNesting;
+
+            // Research only: outcome S = singular, M = multi-cut, N = neither
+            if (sampleSingular && singularNesting == 0)
+                sync_cout << "singular outcome "
+                          << (value < singularBeta ? "S" : value >= beta && !is_decisive(value) ? "M" : "N")
+                          << " nodes " << u64(nodes) - nodesBefore << " depth " << depth << " ttdepth "
+                          << ttData.depth << " pvnode " << PvNode << " cutnode " << cutNode << " ttpv "
+                          << ss->ttPv << " ttcapture " << ttCapture << " improving " << improving
+                          << " ply " << ss->ply << " alpha " << alpha << " beta " << beta << " ttvalue "
+                          << ttData.value << " static " << ss->staticEval << " sbeta " << singularBeta
+                          << " value " << value << " corr " << correctionValue << " ttmovehist "
+                          << ttMoveHistory << " fen " << pos.fen() << sync_endl;
 
             if (value < singularBeta)
             {
