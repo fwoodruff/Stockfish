@@ -56,9 +56,10 @@ namespace Stockfish {
 //
 // Pv, bound and generation are packed in a single byte.
 
-// Replacement bonus for entries flagged as high variance, in plies (0 = off)
-int ttRiskBonus = 0;
-TUNE(SetRange(-8, 24), ttRiskBonus);
+// Replacement terms for entries flagged as high variance: a bonus in plies (0 = off) and the
+// age penalty per generation (8, as for other entries, = off)
+int ttRiskBonus = 0, ttRiskyAgePenalty = 8;
+TUNE(SetRange(-8, 24), ttRiskBonus, SetRange(0, 16), ttRiskyAgePenalty);
 
 static constexpr u8 GENERATION_BITS = 4;
 static constexpr u8 GENERATION_MASK = (1 << GENERATION_BITS) - 1;
@@ -302,10 +303,12 @@ std::tuple<bool, TTData, TTWriter> TranspositionTable::probe(const Key key) cons
     }
 
     // Find an entry to be replaced according to the replacement strategy. Entries whose
-    // static eval was flagged as high variance are worth ttRiskBonus extra plies.
+    // static eval was flagged as high variance are worth ttRiskBonus extra plies and can
+    // age more slowly.
     auto worth = [&](const TTEntry& e) {
-        return e.depth8 - 8 * e.relative_age(generation8)
-             + ttRiskBonus * bool(e.genBound8 & RISKY_MASK);
+        const bool risky = e.genBound8 & RISKY_MASK;
+        return e.depth8 - (risky ? ttRiskyAgePenalty : 8) * e.relative_age(generation8)
+             + ttRiskBonus * risky;
     };
     int replace = 0;
     for (int i = 1; i < ClusterSize; ++i)
