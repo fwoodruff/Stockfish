@@ -140,7 +140,8 @@ bool Network::save(const EvalFile& evalFile, const std::optional<fs::path>& file
 
 Value Network::evaluate(const Position&    pos,
                         AccumulatorStack&  accumulatorStack,
-                        AccumulatorCaches& cache) const {
+                        AccumulatorCaches& cache,
+                        Value*             neighbour) const {
 
     constexpr u64 alignment = CacheLineSize;
 
@@ -157,6 +158,18 @@ Value Network::evaluate(const Position&    pos,
 
     featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, nnzInfo);
     const auto positional = network[bucket].propagate(transformedFeatures, nnzInfo);
+
+    // Research only: also run the head of the nearest piece-count bucket (same queen config)
+    // on the already transformed features
+    if (neighbour)
+    {
+        const int r  = (pos.count<ALL_PIECES>() - 1) % 4;
+        const int nb = pcBucket == 0 ? 1 : pcBucket == 7 ? 6 : r < 2 ? pcBucket - 1 : pcBucket + 1;
+        *neighbour =
+          static_cast<Value>(network[nb * 4 + queenBucket].propagate(transformedFeatures, nnzInfo)
+                             / OutputScale);
+    }
+
     return static_cast<Value>(positional / OutputScale);
 }
 

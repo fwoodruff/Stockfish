@@ -48,7 +48,8 @@ Value evaluate(const NNUE::Network&           network,
                const Position&                pos,
                Eval::NNUE::AccumulatorStack&  accumulators,
                Eval::NNUE::AccumulatorCaches& caches,
-               int                            optimism);
+               int                            optimism,
+               int*                           headDisagreement = nullptr);
 }  // namespace Eval
 
 }  // namespace Stockfish

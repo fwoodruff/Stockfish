@@ -285,7 +285,9 @@ bool Search::Worker::iterative_deepening() {
 
     PVMoves pv;
 
-    sampleEvery = int(options["SampleNodes"]);
+    sampleEvery   = int(options["SampleNodes"]);
+    headExtra     = int(options["HeadExtra"]);
+    researchStats = bool(options["ResearchStats"]);
     sampleRng   = 0x9E3779B97F4A7C15ULL + threadIdx;
 
     RootPVMoves lastBestMovePV;
@@ -310,6 +312,7 @@ bool Search::Worker::iterative_deepening() {
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
         (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
         (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->headDis                       = -1;
     }
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
@@ -848,6 +851,9 @@ Value Search::Worker::search(
 
     // Step 5. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
+    bool  nnEvalDone           = false;  // research only
+    int*  headDisOut           = headExtra ? &ss->headDis : nullptr;
+    ss->headDis                = -1;
 
     // Skip early pruning when in check
     if (ss->inCheck)
@@ -859,7 +865,9 @@ Value Search::Worker::search(
         // Never assume anything about values stored in TT
         unadjustedStaticEval = ttData.eval;
         if (!is_valid(unadjustedStaticEval))
-            unadjustedStaticEval = evaluate(pos);
+            unadjustedStaticEval = evaluate(pos, headDisOut), nnEvalDone = true;
+        else if (headExtra == 3)
+            evaluate(pos, headDisOut);  // research only: force it at TT hits too
 
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
@@ -870,7 +878,7 @@ Value Search::Worker::search(
     }
     else
     {
-        unadjustedStaticEval = evaluate(pos);
+        unadjustedStaticEval = evaluate(pos, headDisOut), nnEvalDone = true;
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // Static evaluation is saved as it was before adjustment by correction history
@@ -887,6 +895,13 @@ Value Search::Worker::search(
     improving         = ss->staticEval > (ss - 2)->staticEval;
     opponentWorsening = ss->staticEval > -(ss - 1)->staticEval;
 
+    if (researchStats && !ss->inCheck && !excludedMove)
+    {
+        dbg_hit_on(nnEvalDone, 0);  // main-search nodes needing a fresh NN eval
+        if (nnEvalDone)
+            dbg_hit_on(true, 1);  // NN evals: main search (hit) vs qsearch (miss)
+    }
+
     // Hindsight adjustment of reductions based on static evaluation difference
     if (priorReduction >= 3 && !opponentWorsening)
         depth++;
@@ -902,7 +917,8 @@ Value Search::Worker::search(
                       << " cutnode " << cutNode << " ttpv " << ss->ttPv << " tthit " << ss->ttHit
                       << " improving " << improving << " alpha " << alpha << " beta " << beta
                       << " raw " << unadjustedStaticEval << " static " << ss->staticEval << " corr "
-                      << correctionValue << " fen " << pos.fen() << sync_endl;
+                      << correctionValue << " headdis " << ss->headDis << " parentheaddis "
+                      << (ss - 1)->headDis << " fen " << pos.fen() << sync_endl;
     }
 
     // Step 6. At non-PV nodes we check for an early TT cutoff. Note that we
@@ -1045,6 +1061,15 @@ Value Search::Worker::search(
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
                              + std::abs(correctionValue) / 198435;
 
+        if (researchStats)
+        {
+            const int gap = std::abs(eval - futilityMargin - beta);
+            dbg_hit_on(gap < 25, 2);
+            dbg_hit_on(gap < 50, 3);
+            dbg_hit_on(gap < 100, 4);
+            dbg_hit_on(nnEvalDone, 5);  // disagreement available for free at futility nodes
+        }
+
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
     }
@@ -1165,6 +1190,9 @@ moves_loop:  // When in check, search starts here
     value = bestValue;
 
     int moveCount = 0;
+
+    if (researchStats)
+        dbg_hit_on(nnEvalDone, 6);  // move-loop parents: hit = disagreement free here
 
     // Step 14. Loop through all legal moves until no moves remain
     // or a beta cutoff occurs.
@@ -1776,7 +1804,11 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             unadjustedStaticEval = ttData.eval;
 
             if (!is_valid(unadjustedStaticEval))
-                unadjustedStaticEval = evaluate(pos);
+            {
+                unadjustedStaticEval = evaluate(pos, headExtra == 2 ? &ss->headDis : nullptr);
+                if (researchStats)
+                    dbg_hit_on(false, 1);
+            }
 
             ss->staticEval = bestValue =
               to_corrected_static_eval(unadjustedStaticEval, correctionValue);
@@ -1788,8 +1820,10 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         }
         else
         {
-            unadjustedStaticEval = evaluate(pos);
-            ss->staticEval       = bestValue =
+            unadjustedStaticEval = evaluate(pos, headExtra == 2 ? &ss->headDis : nullptr);
+            if (researchStats)
+                dbg_hit_on(false, 1);
+            ss->staticEval = bestValue =
               to_corrected_static_eval(unadjustedStaticEval, correctionValue);
         }
 
@@ -1947,9 +1981,9 @@ TimePoint Search::Worker::elapsed() const {
 
 // Evaluate the current position of the game tree, from the point of view of
 // the side to move.
-Value Search::Worker::evaluate(const Position& pos) {
+Value Search::Worker::evaluate(const Position& pos, int* headDisagreement) {
     return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,
-                          optimism[pos.side_to_move()]);
+                          optimism[pos.side_to_move()], headDisagreement);
 }
 
 namespace {

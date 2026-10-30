@@ -130,6 +130,7 @@ struct Stack {
     int                         cutoffCnt;
     int                         reduction;
     int                         priorNMPFailHigh;
+    int                         headDis;  // research only, -1 if not computed
 };
 
 
@@ -372,7 +373,7 @@ class Worker {
 
     TimePoint elapsed() const;
 
-    Value evaluate(const Position&);
+    Value evaluate(const Position&, int* headDisagreement = nullptr);
 
     LimitsType limits;
 
@@ -380,6 +381,8 @@ class Worker {
     RelaxedAtomic<u64> nodes, tbHits, bestMoveChanges;
     int                selDepth, nmpMinPly;
     int                sampleEvery = 0;
+    int                headExtra   = 0;
+    bool               researchStats = false;
     u64                sampleRng   = 0;
 
     Value optimism[COLOR_NB];

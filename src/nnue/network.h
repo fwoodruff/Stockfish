@@ -64,7 +64,8 @@ class Network {
 
     Value evaluate(const Position&    pos,
                    AccumulatorStack&  accumulatorStack,
-                   AccumulatorCaches& cache) const;
+                   AccumulatorCaches& cache,
+                   Value*             neighbour = nullptr) const;
 
 
     void verify(const std::function<void(std::string_view)>& f,

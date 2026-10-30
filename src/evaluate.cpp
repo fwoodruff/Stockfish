@@ -50,10 +50,14 @@ Value Eval::evaluate(const Eval::NNUE::Network&     network,
                      const Position&                pos,
                      Eval::NNUE::AccumulatorStack&  accumulators,
                      Eval::NNUE::AccumulatorCaches& caches,
-                     int                            optimism) {
+                     int                            optimism,
+                     int*                           headDisagreement) {
 
     assert(!pos.checkers());
-    Value nnue = network.evaluate(pos, accumulators, caches);
+    Value neighbour = VALUE_ZERO;
+    Value nnue = network.evaluate(pos, accumulators, caches, headDisagreement ? &neighbour : nullptr);
+    if (headDisagreement)
+        *headDisagreement = std::abs(nnue - neighbour);
     return scale_evaluation(nnue, optimism, pos);
 }
 

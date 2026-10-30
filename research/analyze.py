@@ -79,13 +79,19 @@ def add_features(df):
     # insearch
     if "s_corr" in df:
         df["abs_corr_cp"] = df.s_corr.abs() * CORR_TO_INTERNAL * 100 / df.a
+    # insearch, single nearest neighbouring head as the engine computes it (HeadExtra), for this
+    # node and for its parent (the "one ply up" variant)
+    for k, col in (("own_hd", "s_headdis_cp"), ("parent_hd", "s_parentheaddis_cp")):
+        df[k] = df[col] if col in df else np.nan
     return df
 
 
 STATIC = ["mat_disagree", "head_nb", "head_spread", "legal", "captures", "checks"]
 SEARCH_A = ["d1_jump", "d4_jump", "id_instab", "bm_changes_1_4", "log_nodes_d4"]
 SEARCH_B = ["d1_jump", "d4_jump", "id_instab", "bm_changes_1_4", "log_nodes_d4"]
-COST = {**{p: "static" for p in STATIC}, **{p: "search" for p in SEARCH_A}, "abs_corr_cp": "insearch"}
+HEADS = ["own_hd", "parent_hd"]
+COST = {**{p: "static" for p in STATIC}, **{p: "search" for p in SEARCH_A}, "abs_corr_cp": "insearch",
+        "own_hd": "insearch", "parent_hd": "insearch"}
 
 
 # ---------- small numpy models ----------
@@ -208,6 +214,91 @@ def q3_flips(df, proxies, max_margin):
         print(f"      {label:16} " + "".join(f"{r:8.3f}" for r in rates).ljust(44) + f" {100 * gain:9.1f}%")
 
 
+def logit_fit(X, y, iters=50, l2=1e-4):
+    mu, sd = X.mean(0), X.std(0) + 1e-9
+    Z = np.column_stack([np.ones(len(y)), (X - mu) / sd])
+    w = np.zeros(Z.shape[1])
+    for _ in range(iters):
+        p = 1 / (1 + np.exp(-np.clip(Z @ w, -30, 30)))
+        g = Z.T @ (p - y) / len(y) + l2 * w
+        H = (Z * (p * (1 - p))[:, None]).T @ Z / len(y) + l2 * np.eye(len(w))
+        w -= np.linalg.solve(H, g)
+    return mu, sd, w
+
+
+def logit_eval(model, X, y):
+    mu, sd, w = model
+    Z = np.column_stack([np.ones(len(y)), (X - mu) / sd])
+    p = np.clip(1 / (1 + np.exp(-np.clip(Z @ w, -30, 30))), 1e-9, 1 - 1e-9)
+    return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+
+def cluster_boot_gain(Xb, x, y, groups, reps=100, seed=0):
+    """Out-of-sample relative log-loss gain of adding tf(x) to Xb.
+
+    Each rep fits both models on a bootstrap sample of whole searches and scores them on the
+    searches left out, so a useless proxy can come out negative. Returns median and 90% interval.
+    """
+    Xf = np.column_stack([Xb, tf(x)])
+    rng = np.random.default_rng(seed)
+    ug, inv = np.unique(groups, return_inverse=True)
+    members = [np.flatnonzero(inv == g) for g in range(len(ug))]
+    gains = []
+    for _ in range(reps):
+        pick = rng.integers(0, len(ug), len(ug))
+        oob = np.setdiff1d(np.arange(len(ug)), pick)
+        tr = np.concatenate([members[g] for g in pick])
+        te = np.concatenate([members[g] for g in oob])
+        if y[tr].min() == y[tr].max() or y[te].min() == y[te].max():
+            continue
+        b = logit_eval(logit_fit(Xb[tr], y[tr]), Xb[te], y[te])
+        f = logit_eval(logit_fit(Xf[tr], y[tr]), Xf[te], y[te])
+        gains.append((b - f) / b)
+    lo, med, hi = np.percentile(gains, [5, 50, 95])
+    return med, lo, hi
+
+
+def q3_with_ci(df, proxies, max_margin):
+    s = complete(df[df.src == "node"], ["abs_corr_cp"]).copy()
+    s["margin"] = s.s_static_cp - s.s_beta_cp
+    s = s[s.margin.abs() <= max_margin]
+    y = (np.sign(s.margin) != np.sign(s.deep_cp - s.s_beta_cp)).values.astype(float)
+    m = s.margin.abs().values
+    Xb = np.column_stack([m, np.sqrt(m), s.pieces, tf(s.abs_corr_cp)])
+    print(f"  all node samples, |static - beta| <= {max_margin}: n={len(s)}, flip rate {y.mean():.3f}, "
+          f"{s.book_idx.nunique()} searches")
+    print(f"      {'proxy':16} {'logloss gain':>12}  {'90% interval, held-out searches':>32}")
+    for p in proxies:
+        ok = ~np.isnan(s[p].values)
+        if ok.sum() < 300:
+            continue
+        g, lo, hi = cluster_boot_gain(Xb[ok], s[p].values[ok], y[ok], s.book_idx.values[ok])
+        print(f"      {p:16} {100 * g:11.2f}%  [{100 * lo:6.2f}%, {100 * hi:6.2f}%]  n={ok.sum()}")
+
+
+def q4_futility(df, proxies, max_margin):
+    """The exact decision futility pruning makes: non-PV node, static >= beta, prune if the margin
+    is big enough. Event = pruning would be wrong (deep < beta)."""
+    s = complete(df[df.src == "node"], ["abs_corr_cp"]).copy()
+    s["margin"] = s.s_static_cp - s.s_beta_cp
+    s = s[(s.s_pvnode == 0) & (s.s_ttpv == 0) & (s.s_depth < 19) & (s.margin >= 0) & (s.margin <= max_margin)]
+    y = (s.deep_cp < s.s_beta_cp).values.astype(float)
+    m = s.margin.values
+    Xb = np.column_stack([m, np.sqrt(m), s.pieces, s.s_depth, s.s_improving, tf(s.abs_corr_cp)])
+    print(f"  non-PV, static >= beta, margin <= {max_margin}: n={len(s)}, "
+          f"'pruning would be wrong' rate {y.mean():.3f}, {s.book_idx.nunique()} searches")
+    print(f"  baseline = margin + pieces + depth + improving + |correction|")
+    print(f"      {'proxy':16} {'wrong-prune rate by proxy quintile (low -> high)':48} {'gain':>7}  {'90% held-out':>18}")
+    for p in proxies:
+        ok = ~np.isnan(s[p].values)
+        if ok.sum() < 300:
+            continue
+        rates = quintile_rates(s[p].values[ok], y[ok])
+        g, lo, hi = cluster_boot_gain(Xb[ok], s[p].values[ok], y[ok], s.book_idx.values[ok])
+        print(f"      {p:16} " + "".join(f"{r:8.3f}" for r in rates).ljust(48)
+              + f" {100 * g:6.2f}%  [{100 * lo:5.2f}%, {100 * hi:5.2f}%]")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("files", nargs="+")
@@ -224,7 +315,7 @@ def main():
             continue
         print(f"\n[{src}] |static err| p50/p90/p99 cp: {np.percentile(s.err_static.abs(), [50, 90, 99]).round().tolist()}"
               f"   |shallow err|: {np.percentile(s.err_shallow.dropna().abs(), [50, 90, 99]).round().tolist()}")
-        ins = ["abs_corr_cp"] if src == "node" else []
+        ins = (["abs_corr_cp"] + [h for h in HEADS if s[h].notna().sum() > 300]) if src == "node" else []
         print(f"\n=== [{src}] A. static error ===")
         q1_error_size(s, "v0", "err_static", STATIC + ins)
         print()
@@ -235,8 +326,13 @@ def main():
         q2_tails(s, "d4", STATIC + SEARCH_B + ins, *a.band)
 
     if (df.src == "node").sum() >= 300:
+        heads = [h for h in HEADS if df[h].notna().sum() > 300]
         print("\n=== [node] Q3 pruning flips (static vs beta) ===")
         q3_flips(df, STATIC, a.max_margin)
+        print("\n=== [node] Q3 with cluster-bootstrap CIs ===")
+        q3_with_ci(df, ["mat_disagree", "head_nb", "captures", *heads], a.max_margin)
+        print("\n=== [node] Q4 futility decision (would pruning be wrong?) ===")
+        q4_futility(df, ["mat_disagree", "head_nb", "captures", *heads], a.max_margin)
 
 
 if __name__ == "__main__":

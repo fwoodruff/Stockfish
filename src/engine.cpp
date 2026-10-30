@@ -123,6 +123,11 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Research only: print roughly one in N search nodes as a "sample" line (0 = off)
     options.add("SampleNodes", Option(0, 0, 100000000));
 
+    // Research only: run the neighbouring NNUE head (0 off, 1 main search, 2 all evals,
+    // 3 main search incl. TT hits) and count eval/pruning statistics
+    options.add("HeadExtra", Option(0, 0, 3));
+    options.add("ResearchStats", Option(false));
+
     options.add(  //
       "SyzygyPath", Option("", [](const Option& o) {
           Tablebases::init(o);

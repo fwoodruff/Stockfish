@@ -60,8 +60,11 @@ class Engine:
         self.wait_for("readyok")
 
     def set_sampling(self, every):
+        # HeadExtra 3 makes every main-search node compute its head disagreement (also at TT
+        # hits), so samples carry their own and their parent's; it does not change the search
         if every != self.sample_every:
             self.send(f"setoption name SampleNodes value {every}")
+            self.send(f"setoption name HeadExtra value {3 if every else 0}")
             self.sample_every = every
 
     def new_position(self, fen, moves=(), clear=True):
@@ -179,8 +182,8 @@ def task(args):
                 r = deep_record(eng, s["fen"], cfg["depth"], extra)
                 if r:
                     a = r["a"]  # node values below are internal units of this same position
-                    for k in ("alpha", "beta", "raw", "static", "corr"):
-                        if k != "corr":
+                    for k in ("alpha", "beta", "raw", "static", "headdis", "parentheaddis"):
+                        if k in s and s[k] != -1:
                             r[f"s_{k}_cp"] = 100 * s[k] / a
                     out.append(r)
 
