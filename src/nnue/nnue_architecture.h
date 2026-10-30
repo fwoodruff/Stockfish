@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include <iosfwd>
+#include <iterator>
 
 #include "features/k32h3.h"
 #include "features/full_threats.h"
@@ -32,6 +33,7 @@
 #include "layers/clipped_relu.h"
 #include "layers/sqr_clipped_relu.h"
 #include "nnue_common.h"
+#include "nnue_risk_weights.h"
 #include "nnz_helper.h"
 
 namespace Stockfish::Eval::NNUE {
@@ -92,8 +94,13 @@ struct NetworkArchitecture {
             && fc_2.write_parameters(stream);
     }
 
-    i32 propagate(const TransformedFeatureType* transformedFeatures,
-                  const NNZInfo<L1>&            nnzInfo) const {
+    struct Output {
+        i32 positional;
+        i32 risk;  // see nnue_risk_weights.h
+    };
+
+    Output propagate(const TransformedFeatureType* transformedFeatures,
+                     const NNZInfo<L1>&            nnzInfo) const {
         struct alignas(CacheLineSize) Buffer {
             alignas(CacheLineSize) typename decltype(fc_0)::OutputBuffer fc_0_out;
             alignas(CacheLineSize) typename decltype(ac_sqr_0)::OutputType
@@ -124,6 +131,12 @@ struct NetworkArchitecture {
 
         fc_2.propagate(buffer.concat_buffer, buffer.fc_2_out);
 
+        // A second linear output on the inputs of fc_2
+        static_assert(std::size(RiskWeights) == FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2);
+        i32 risk = RiskBias;
+        for (IndexType i = 0; i < std::size(RiskWeights); ++i)
+            risk += RiskWeights[i] * buffer.concat_buffer[i];
+
         static_assert(FC_0_OUTPUTS >= 2);
         i32 fwdOut = buffer.fc_2_out[0];
         i32 skip_0 = buffer.fc_0_out[FC_0_OUTPUTS - 2] - buffer.fc_0_out[FC_0_OUTPUTS - 1];
@@ -137,7 +150,7 @@ struct NetworkArchitecture {
           static_cast<i64>(HiddenOneVal) * static_cast<i64>(1U << WeightScaleBits) * 2;
 
         i32 outputValue = static_cast<i32>((static_cast<i64>(fwdOut) * multiplier) / denominator);
-        return outputValue;
+        return {outputValue, risk >> RiskShift};
     }
 
     usize get_content_hash() const {

@@ -45,15 +45,15 @@ static int simple_eval(const Position& pos) {
 
 Value scale_evaluation(Value nnue, int optimism, const Position& pos);
 
-Value Eval::evaluate(const Eval::NNUE::Network&     network,
-                     const Position&                pos,
-                     Eval::NNUE::AccumulatorStack&  accumulators,
-                     Eval::NNUE::AccumulatorCaches& caches,
-                     int                            optimism) {
+Eval::Evaluation Eval::evaluate(const Eval::NNUE::Network&     network,
+                                const Position&                pos,
+                                Eval::NNUE::AccumulatorStack&  accumulators,
+                                Eval::NNUE::AccumulatorCaches& caches,
+                                int                            optimism) {
 
     assert(!pos.checkers());
-    Value nnue = network.evaluate(pos, accumulators, caches);
-    return scale_evaluation(nnue, optimism, pos);
+    const auto [nnue, risk] = network.evaluate(pos, accumulators, caches);
+    return {scale_evaluation(nnue, optimism, pos), risk};
 }
 
 // Applies search-dependent scaling (optimism and rule50) to the raw NNUE eval
@@ -102,7 +102,7 @@ std::string Eval::trace(Position& pos, const Eval::NNUE::Network& network) {
 
     ss << std::showpoint << std::showpos << std::fixed << std::setprecision(2) << std::setw(15);
 
-    Value nnue = network.evaluate(pos, *accumulators, *caches);
+    Value nnue = network.evaluate(pos, *accumulators, *caches).value;
     Value s_v  = scale_evaluation(nnue, VALUE_ZERO, pos);  // requires stm perspective
 
     ss << "NNUE evaluation          " << nnue << " (side to move, internal units)\n";
