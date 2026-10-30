@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -91,6 +92,15 @@ const std::array<int, MAX_MOVES> reductions = [] {
 
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
+
+// Tuning only: futility margin parameters for an SPSA session
+int futilityMultBase = 45, corrDivisor = 198435, riskScale = 64;
+TUNE(SetRange(25, 65),
+     futilityMultBase,
+     SetRange(100000, 400000),
+     corrDivisor,
+     SetRange(0, 192),
+     riskScale);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
@@ -1030,12 +1040,12 @@ Value Search::Worker::search(
     if (!ss->ttPv && depth < (seekMate ? 6 : 19) && eval >= beta && (!ttData.move || ttCapture)
         && !is_loss(beta) && !is_win(eval))
     {
-        Value futilityMult = std::min(45 + depth * 4, 85);
+        Value futilityMult = std::min(futilityMultBase + depth * 4, 85);
         futilityMult -= 20 * !ss->ttHit;
 
-        Value futilityMargin = futilityMult * depth
-                             - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
-                             + std::abs(correctionValue) / 198435 + std::clamp(risk, -64, 128);
+        Value futilityMargin =
+          futilityMult * depth - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
+          + std::abs(correctionValue) / corrDivisor + std::clamp(risk, -64, 128) * riskScale / 64;
 
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
