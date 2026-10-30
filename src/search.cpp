@@ -98,6 +98,11 @@ const std::array<int, MAX_MOVES> reductions = [] {
 int ttRiskThreshold = 128;
 TUNE(SetRange(-128, 512), ttRiskThreshold);
 
+// Extra depth a TT entry flagged as high variance needs before its value can cut off the
+// search at a non-PV node (0 = as for other entries)
+int ttRiskyCutoffDepth = 0;
+TUNE(SetRange(0, 4), ttRiskyCutoffDepth);
+
 // Late move reduction terms for the eval risk outputs, in 1/1024 ply per standard deviation
 // of the risk. Tunable; 0 leaves the search unchanged.
 int lmrUp = 0, lmrDown = 0;
@@ -918,7 +923,7 @@ Value Search::Worker::search(
     // Step 6. At non-PV nodes we check for an early TT cutoff. Note that we
     //         always check the validity of the TT value because of access races.
     if (!PvNode && !excludedMove && is_valid(ttData.value)
-        && ttData.depth > depth - (ttData.value <= beta))
+        && ttData.depth > depth - (ttData.value <= beta) + ttRiskyCutoffDepth * ttData.risky)
     {
         // Case A: TT entry can produce a cutoff
         if ((ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))
