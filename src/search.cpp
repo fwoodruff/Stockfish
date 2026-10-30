@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -91,6 +92,11 @@ const std::array<int, MAX_MOVES> reductions = [] {
 
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
+
+// Late move reduction terms for the eval risk outputs, in 1/1024 ply per standard deviation
+// of the risk. Tunable; 0 leaves the search unchanged.
+int lmrUp = 0, lmrDown = 0;
+TUNE(SetRange(-1536, 1536), lmrUp, lmrDown);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
@@ -845,7 +851,7 @@ Value Search::Worker::search(
 
     // Step 5. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
-    int   risk                 = 0;  // only known with a fresh evaluation
+    int   down = 0, up = 0;  // eval risk, only known with a fresh evaluation
 
     // Skip early pruning when in check
     if (ss->inCheck)
@@ -860,7 +866,8 @@ Value Search::Worker::search(
         {
             const auto evaluation = evaluate(pos);
             unadjustedStaticEval  = evaluation.value;
-            risk                  = evaluation.risk;
+            down                  = evaluation.down;
+            up                    = evaluation.up;
         }
 
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
@@ -874,7 +881,8 @@ Value Search::Worker::search(
     {
         const auto evaluation = evaluate(pos);
         unadjustedStaticEval  = evaluation.value;
-        risk                  = evaluation.risk;
+        down                  = evaluation.down;
+        up                    = evaluation.up;
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // Static evaluation is saved as it was before adjustment by correction history
@@ -1035,7 +1043,7 @@ Value Search::Worker::search(
 
         Value futilityMargin = futilityMult * depth
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
-                             + std::abs(correctionValue) / 198435 + std::clamp(risk, -64, 128);
+                             + std::abs(correctionValue) / 198435;
 
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
@@ -1360,6 +1368,7 @@ moves_loop:  // When in check, search starts here
 
         r -= moveCount * 65;
         r -= std::abs(correctionValue) / 26310;
+        r -= lmrUp * std::clamp(up, -128, 256) / 64 + lmrDown * std::clamp(down, -128, 256) / 64;
 
         // Increase reduction for cut nodes
         if (cutNode)

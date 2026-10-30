@@ -52,8 +52,8 @@ Eval::Evaluation Eval::evaluate(const Eval::NNUE::Network&     network,
                                 int                            optimism) {
 
     assert(!pos.checkers());
-    const auto [nnue, risk] = network.evaluate(pos, accumulators, caches);
-    return {scale_evaluation(nnue, optimism, pos), risk};
+    const auto [nnue, down, up] = network.evaluate(pos, accumulators, caches);
+    return {scale_evaluation(nnue, optimism, pos), down, up};
 }
 
 // Applies search-dependent scaling (optimism and rule50) to the raw NNUE eval
@@ -103,6 +103,10 @@ std::string Eval::trace(Position& pos, const Eval::NNUE::Network& network) {
     ss << std::showpoint << std::showpos << std::fixed << std::setprecision(2) << std::setw(15);
 
     Value nnue = network.evaluate(pos, *accumulators, *caches).value;
+    {
+        auto o = network.evaluate(pos, *accumulators, *caches);
+        ss << "RISKDBG " << std::noshowpos << o.down << " " << o.up << "\n";
+    }
     Value s_v  = scale_evaluation(nnue, VALUE_ZERO, pos);  // requires stm perspective
 
     ss << "NNUE evaluation          " << nnue << " (side to move, internal units)\n";
