@@ -285,6 +285,9 @@ bool Search::Worker::iterative_deepening() {
 
     PVMoves pv;
 
+    sampleEvery = int(options["SampleNodes"]);
+    sampleRng   = 0x9E3779B97F4A7C15ULL + threadIdx;
+
     RootPVMoves lastBestMovePV;
     Depth       lastBestMoveDepth = 0;
     Value       lastBestMoveScore = -VALUE_INFINITE;
@@ -889,6 +892,18 @@ Value Search::Worker::search(
         depth++;
     if (priorReduction >= 2 && depth >= 2 && ss->staticEval + (ss - 1)->staticEval > 166)
         depth--;
+
+    // Research only: emit a sample of nodes with the information available for pruning
+    if (sampleEvery && !rootNode && !ss->inCheck && !excludedMove && is_valid(unadjustedStaticEval))
+    {
+        sampleRng ^= sampleRng >> 12, sampleRng ^= sampleRng << 25, sampleRng ^= sampleRng >> 27;
+        if ((sampleRng * 2685821657736338717ULL) % u64(sampleEvery) == 0)
+            sync_cout << "sample depth " << depth << " ply " << ss->ply << " pvnode " << PvNode
+                      << " cutnode " << cutNode << " ttpv " << ss->ttPv << " tthit " << ss->ttHit
+                      << " improving " << improving << " alpha " << alpha << " beta " << beta
+                      << " raw " << unadjustedStaticEval << " static " << ss->staticEval << " corr "
+                      << correctionValue << " fen " << pos.fen() << sync_endl;
+    }
 
     // Step 6. At non-PV nodes we check for an early TT cutoff. Note that we
     //         always check the validity of the TT value because of access races.

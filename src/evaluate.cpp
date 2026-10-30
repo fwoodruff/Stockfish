@@ -28,6 +28,7 @@
 #include <sstream>
 
 #include "misc.h"
+#include "movegen.h"
 #include "nnue/network.h"
 #include "nnue/nnue_misc.h"
 #include "position.h"
@@ -114,6 +115,47 @@ std::string Eval::trace(Position& pos, const Eval::NNUE::Network& network) {
     ss << "Final evaluation      ";
     ss << 0.01 * UCIEngine::to_cp(s_v, pos) << " (white side)";
     ss << " [with scaled NNUE, ...]\n";
+
+    return ss.str();
+}
+
+// Research only: one line of static features for the eval-error study.
+// All values are side-to-move relative and in internal units.
+std::string Eval::features(Position& pos, const Eval::NNUE::Network& network) {
+
+    std::stringstream ss;
+    ss << "features";
+
+    int legal = 0, captures = 0, checks = 0;
+    for (const auto& m : MoveList<ALL>(pos))
+    {
+        ++legal;
+        captures += pos.capture_stage(m);
+        checks += pos.gives_check(m);
+    }
+    ss << " incheck " << bool(pos.checkers()) << " legal " << legal << " captures " << captures
+       << " checks " << checks << " pieces " << pos.count<ALL_PIECES>() << " rule50 "
+       << pos.rule50_count() << " ply " << pos.game_ply();
+
+    // to_cp(v) = round(100 * v / a), so this recovers a to well under 0.1%
+    ss << " a " << 100.0 * 100000 / UCIEngine::to_cp(100000, pos);
+
+    if (pos.checkers())
+        return ss.str();
+
+    auto accumulators = std::make_unique<Eval::NNUE::AccumulatorStack>();
+    auto caches       = std::make_unique<Eval::NNUE::AccumulatorCaches>(network);
+
+    Value nnue = network.evaluate(pos, *accumulators, *caches);
+    auto  t    = network.trace_evaluate(pos, *accumulators, *caches);
+
+    ss << " nnue " << nnue << " scaled " << scale_evaluation(nnue, VALUE_ZERO, pos) << " simple "
+       << simple_eval(pos) << " bucket " << t.correctBucket << " heads ";
+
+    // Heads for every piece-count bucket with the same queen configuration
+    usize q = t.correctBucket % 4;
+    for (usize b = q; b < Eval::NNUE::LayerStacks; b += 4)
+        ss << (b == q ? "" : ",") << t.positional[b];
 
     return ss.str();
 }
