@@ -1949,8 +1949,6 @@ TimePoint Search::Worker::elapsed() const {
 }
 
 
-// Evaluate the current position of the game tree, from the point of view of
-// the side to move.
 // The learned error size of the static evaluation in this position, see ErrorSizeHistory
 int Search::Worker::error_size(const Position& pos) {
     int sum = 0;
@@ -1959,6 +1957,8 @@ int Search::Worker::error_size(const Position& pos) {
     return sum / 4;
 }
 
+// Evaluate the current position of the game tree, from the point of view of
+// the side to move.
 Value Search::Worker::evaluate(const Position& pos) {
     return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,
                           optimism[pos.side_to_move()],
