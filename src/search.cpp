@@ -100,8 +100,8 @@ TUNE(SetRange(-1536, 1536), lmrUp, lmrDown);
 
 // Razoring margin term for the upside risk of the static eval, in internal units per standard
 // deviation of the risk (0 = off): razor less where the eval is likely to underestimate
-int razorUp = 0;
-TUNE(SetRange(-512, 512), razorUp);
+int razorUp = 0, razorDown = 0;
+TUNE(SetRange(-512, 512), razorUp, razorDown);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
@@ -1035,7 +1035,9 @@ Value Search::Worker::search(
 
     // Step 8. Razoring
     // If eval is really low, skip search entirely and return the qsearch value
-    if (allNode && eval < alpha - 342 * depth - razorUp * std::clamp(up, -128, 256) / 64
+    if (allNode
+        && eval < alpha - 342 * depth - razorUp * std::clamp(up, -128, 256) / 64
+                    - razorDown * std::clamp(down, -128, 256) / 64
         && !seekMate)
         return qsearch<NonPV>(pos, ss, alpha, beta);
 
