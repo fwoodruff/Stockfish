@@ -107,7 +107,7 @@ std::string Eval::trace(Position& pos, const Eval::NNUE::Network& network) {
         auto o = network.evaluate(pos, *accumulators, *caches);
         ss << "RISKDBG " << std::noshowpos << o.down << " " << o.up << "\n";
     }
-    Value s_v  = scale_evaluation(nnue, VALUE_ZERO, pos);  // requires stm perspective
+    Value s_v = scale_evaluation(nnue, VALUE_ZERO, pos);  // requires stm perspective
 
     ss << "NNUE evaluation          " << nnue << " (side to move, internal units)\n";
 
