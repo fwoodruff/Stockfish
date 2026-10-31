@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -91,6 +92,15 @@ const std::array<int, MAX_MOVES> reductions = [] {
 
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
+
+// Root re-search and aspiration window coupling. At the root, an LMR fail high that beats alpha by
+// at most RootReSearchMargin (in practice nearly all of them) skips the null-window full-depth
+// re-search and goes straight to the PV search. aspKeep / aspKeepIfSkipped (tuning): share (/1024)
+// of the window above alpha kept after a fail low; the second applies only in iterations where a
+// root re-search was skipped. 0 = beta = alpha after a fail low, as in master.
+constexpr int RootReSearchMargin = 32;
+int           aspKeep = 0, aspKeepIfSkipped = 0;
+TUNE(SetRange(-256, 512), aspKeep, aspKeepIfSkipped);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
@@ -407,9 +417,10 @@ bool Search::Worker::iterative_deepening() {
             {
                 // Adjust the effective depth searched, but ensure at least one
                 // effective increment for every four searchAgain steps (see issue #2717).
-                Depth adjustedDepth = std::max(1, rootDepth - failedHighCnt - failHighRecovery
-                                                    - 3 * (searchAgainCounter + 1) / 4);
-                bestValue           = search<Root>(rootPos, ss, alpha, beta, adjustedDepth, false);
+                Depth adjustedDepth   = std::max(1, rootDepth - failedHighCnt - failHighRecovery
+                                                      - 3 * (searchAgainCounter + 1) / 4);
+                rootReSearchesSkipped = 0;
+                bestValue = search<Root>(rootPos, ss, alpha, beta, adjustedDepth, false);
 
                 // Bring the best move to the front. It is critical that sorting
                 // is done with a stable algorithm because all the values but the
@@ -436,7 +447,12 @@ bool Search::Worker::iterative_deepening() {
                 // otherwise exit the loop.
                 if (bestValue <= alpha)
                 {
-                    beta  = alpha;
+                    // Keep part of the window above alpha, more so when this iteration skipped
+                    // root re-searches and so verified less (0 = master: beta = alpha)
+                    const int keep = aspKeep + aspKeepIfSkipped * (rootReSearchesSkipped > 0);
+                    beta           = std::max(
+                      alpha,
+                      alpha + (std::min(bestValue + delta, VALUE_INFINITE) - alpha) * keep / 1024);
                     alpha = std::max(bestValue - delta, -VALUE_INFINITE);
 
                     failedHighCnt = 0;
@@ -1407,9 +1423,15 @@ moves_loop:  // When in check, search starts here
             value         = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, d, true);
             ss->reduction = 0;
 
+            // At the root, a small LMR fail high goes straight to the PV search below, without the
+            // null-window full-depth re-search (see RootReSearchMargin)
+            const bool skipReSearch =
+              rootNode && value > alpha && value <= alpha + RootReSearchMargin;
+            rootReSearchesSkipped += skipReSearch;
+
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Shallower searches here don't scale well
-            if (value > alpha)
+            if (value > alpha && !skipReSearch)
             {
                 // Adjust full-depth search based on LMR results - if the result was
                 // good enough search deeper, if it was bad enough search shallower.
