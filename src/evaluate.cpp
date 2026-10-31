@@ -32,6 +32,7 @@
 #include "nnue/nnue_misc.h"
 #include "position.h"
 #include "types.h"
+#include "tune.h"
 #include "uci.h"
 #include "nnue/nnue_accumulator.h"
 
@@ -43,21 +44,26 @@ static int simple_eval(const Position& pos) {
          - pos.non_pawn_material(~c);
 }
 
-Value scale_evaluation(Value nnue, int optimism, const Position& pos);
+Value scale_evaluation(Value nnue, int optimism, const Position& pos, int errorSize = 0);
 
 Value Eval::evaluate(const Eval::NNUE::Network&     network,
                      const Position&                pos,
                      Eval::NNUE::AccumulatorStack&  accumulators,
                      Eval::NNUE::AccumulatorCaches& caches,
-                     int                            optimism) {
+                     int                            optimism,
+                     int                            errorSize) {
 
     assert(!pos.checkers());
     Value nnue = network.evaluate(pos, accumulators, caches);
-    return scale_evaluation(nnue, optimism, pos);
+    return scale_evaluation(nnue, optimism, pos, errorSize);
 }
 
+// Weight of the learned error size (ErrorSizeHistory) in the complexity term below. 0 = off.
+int errorComplex = 0;
+TUNE(SetRange(-1024, 1024), errorComplex);
+
 // Applies search-dependent scaling (optimism and rule50) to the raw NNUE eval
-Value scale_evaluation(Value nnue, int optimism, const Position& pos) {
+Value scale_evaluation(Value nnue, int optimism, const Position& pos, int errorSize) {
     Value se = simple_eval(pos);
 
     // Normalize the raw evaluations to [-1024, 1024] to measure their correlation.
@@ -67,6 +73,9 @@ Value scale_evaluation(Value nnue, int optimism, const Position& pos) {
     // otherwise (negative correlation) it involves complex compensation. In a representative
     // sample, correl averages -1 or so, i.e. it is well-centered in [-2048, 2048].
     int correl = (se_norm * nnue_norm) / 512;
+
+    // Positions where the static eval has recently been unreliable count as more complex
+    correl = std::clamp(correl - errorComplex * errorSize / 64, -2048, 2048);
 
     // When winning, we boost easy positions, and vice versa
     int v = nnue + (nnue + optimism) * correl / 65536;

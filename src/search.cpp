@@ -713,6 +713,7 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
     mainHistory.fill(-5);
+    errorSizeHistory.fill(i16(0));
     captureHistory.fill(-742);
 
     // Each thread clears its part of the dynamically-sized shared histories.
@@ -1672,6 +1673,17 @@ moves_loop:  // When in check, search starts here
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 18) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
         update_correction_history(pos, ss, *this, 1061 * bonus / 1024);
+
+        // Learn the size of the error on a log scale (16 per doubling), relative to its usual
+        // size at this eval, which grows with |eval|
+        if (!is_decisive(bestValue))
+        {
+            const int err      = std::min(std::abs(bestValue - ss->staticEval), 4096) + 10;
+            const int logErr   = 16 * msb(err) + (((err << 4) >> msb(err)) & 15);
+            const int expected = 87 + 13 * std::min(std::abs(ss->staticEval), 1000) / 512;
+            auto&     entry    = errorSizeHistory[pos.pawn_key() & (ERROR_SIZE_HISTORY_SIZE - 1)];
+            entry += (4 * (logErr - expected) - entry) * std::min(int(depth), 8) / 32;
+        }
     }
 
     // The search is now complete
@@ -1934,7 +1946,8 @@ TimePoint Search::Worker::elapsed() const {
 // the side to move.
 Value Search::Worker::evaluate(const Position& pos) {
     return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,
-                          optimism[pos.side_to_move()]);
+                          optimism[pos.side_to_move()],
+                          errorSizeHistory[pos.pawn_key() & (ERROR_SIZE_HISTORY_SIZE - 1)]);
 }
 
 namespace {
