@@ -58,9 +58,13 @@ Eval::Evaluation Eval::evaluate(const Eval::NNUE::Network&     network,
 }
 
 // Weight of the network's predicted eval risk (sharpness = down + up, 64 per standard deviation
-// each) in the complexity term below, and the sharpness at which it is neutral. 0 = off.
-int riskComplex = 0, riskComplexCentre = -11;
-TUNE(SetRange(-1024, 1024), riskComplex, SetRange(-256, 256), riskComplexCentre);
+// each) in the complexity term below. 0 = off. Sharpness grows with the size of the eval, so it
+// is measured against its average at that eval (fitted on 1.7M evaluations in searches from 400
+// positions of 10+0.1 games; within +-10 of zero across |nnue|, against a standard deviation of 78):
+// the term then only reacts to positions that are sharper or calmer than their eval suggests,
+// rather than also rescaling large evals as a whole.
+int riskComplex = 0;
+TUNE(SetRange(-1024, 1024), riskComplex);
 
 // Applies search-dependent scaling (optimism and rule50) to the raw NNUE eval
 Value scale_evaluation(Value nnue, int optimism, const Position& pos, int sharpness) {
@@ -75,9 +79,9 @@ Value scale_evaluation(Value nnue, int optimism, const Position& pos, int sharpn
     int correl = (se_norm * nnue_norm) / 512;
 
     // A sharper position, by the network's own risk estimate, is more complex
-    correl =
-      std::clamp(correl - riskComplex * (std::clamp(sharpness, -256, 512) - riskComplexCentre) / 64,
-                 -2048, 2048);
+    const int expectedSharpness = 2 + 17 * std::min(std::abs(nnue), 1500) / 256;
+    correl = std::clamp(
+      correl - riskComplex * (std::clamp(sharpness, -256, 512) - expectedSharpness) / 64, -2048, 2048);
 
     // When winning, we boost easy positions, and vice versa
     int v = nnue + (nnue + optimism) * correl / 65536;

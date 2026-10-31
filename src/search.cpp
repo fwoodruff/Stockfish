@@ -46,7 +46,6 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
-#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -857,9 +856,7 @@ Value Search::Worker::search(
         // Never assume anything about values stored in TT
         unadjustedStaticEval = ttData.eval;
         if (!is_valid(unadjustedStaticEval))
-        {
             unadjustedStaticEval = evaluate(pos).value;
-        }
 
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
