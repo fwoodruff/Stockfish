@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -91,6 +92,10 @@ const std::array<int, MAX_MOVES> reductions = [] {
 
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
+
+// Late move pruning threshold multipliers for expected cut and all nodes (1024 = x1)
+int lmpCutMult = 1024, lmpAllMult = 1024;
+TUNE(SetRange(512, 3072), lmpCutMult, lmpAllMult);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
@@ -1198,7 +1203,11 @@ moves_loop:  // When in check, search starts here
         if (!rootNode && pos.non_pawn_material(us) && !is_loss(bestValue))
         {
             // Skip quiet moves if movecount exceeds our threshold
-            if (moveCount >= (3 + depth * depth) / (2 - improving))
+            if (moveCount >= (3 + depth * depth)
+                               * (cutNode   ? lmpCutMult
+                                  : allNode ? lmpAllMult
+                                            : 1024)
+                               / (1024 * (2 - improving)))
                 mp.skip_quiet_moves();
 
             // Reduced depth of the next LMR search
