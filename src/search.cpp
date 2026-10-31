@@ -61,9 +61,12 @@ constexpr int      Size = 16384;
 float              sgn[Size], mag[Size];
 int                cnt[Size];
 unsigned long long seen = 0;
-void               clear() {
+// Residual error size (engine's integer target), learned under several keys
+float tP[Size], tM[Size], tN[Size], tW[Size], tB[Size], g1, g2;
+void  clear() {
     for (int i = 0; i < Size; ++i)
-        sgn[i] = mag[i] = 0, cnt[i] = 0;
+        sgn[i] = mag[i] = 0, cnt[i] = 0, tP[i] = tM[i] = tN[i] = tW[i] = tB[i] = 0;
+    g1 = g2 = 0;
     std::fprintf(stderr, "OVGAME\n");
 }
 }
@@ -1700,6 +1703,23 @@ moves_loop:  // When in check, search starts here
             std::fprintf(stderr, "OV %d %d %d %.0f %.0f %d %d %.2f %.4f %d %d\n", int(depth), bnd,
                          ss->ply, eRaw, eCor, ev.down, ev.up, sgn[idx], mag[idx], cnt[idx],
                          int(ss->staticEval));
+        {
+            const int   err  = std::min(std::abs(int(bestValue - ss->staticEval)), 4096) + 10;
+            const int   lg   = 16 * msb(err) + (((err << 4) >> msb(err)) & 15);
+            const float t    = float(lg - (87 + 13 * std::min(std::abs(int(ss->staticEval)), 1000) / 512));
+            const int   iM   = pos.material_key() & (Size - 1), iN = pos.minor_piece_key() & (Size - 1);
+            const int   iW   = pos.non_pawn_key(WHITE) & (Size - 1), iB = pos.non_pawn_key(BLACK) & (Size - 1);
+            if ((seen & 63) == 0)
+                std::fprintf(stderr, "OV2 %d %d %.0f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %d\n", int(depth), bnd, t,
+                             tP[idx], tM[iM], tN[iN], tW[iW], tB[iB], g1, g2, cnt[idx]);
+            tP[idx] += (t - tP[idx]) * w;
+            tM[iM] += (t - tM[iM]) * w;
+            tN[iN] += (t - tN[iN]) * w;
+            tW[iW] += (t - tW[iW]) * w;
+            tB[iB] += (t - tB[iB]) * w;
+            g1 += (t - g1) * w;
+            g2 += (t - g2) * w / 64;
+        }
         sgn[idx] += (eRaw - sgn[idx]) * w;
         mag[idx] = cnt[idx] ? mag[idx] + (mt - mag[idx]) * w : mt;
         cnt[idx]++;
