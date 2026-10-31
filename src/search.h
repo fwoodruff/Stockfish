@@ -131,6 +131,7 @@ struct Stack {
     int                         cutoffCnt;
     int                         reduction;
     int                         priorNMPFailHigh;
+    int                         role;  // -1024 consolidate .. +1024 explore (SMP roles)
 };
 
 

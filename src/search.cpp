@@ -98,6 +98,40 @@ const std::array<int, MAX_MOVES> reductions = [] {
 int lmrUp = 0, lmrDown = 0;
 TUNE(SetRange(-1536, 1536), lmrUp, lmrDown);
 
+// SMP roles. A small table shared by all threads records which node is being searched and with
+// which role (-1024 consolidate .. +1024 explore). A thread that reaches a node another thread is
+// already searching sets its own role from theirs and from how far the root is behind and how
+// sharp the node is; elsewhere a node inherits its parent's role. All weights default to 0, which
+// keeps every role at 0 and the search unchanged.
+int roleOppose = 0, roleBehind = 0, roleSharp = 0, roleInherit = 0, roleLmr = 0, roleLmp = 0;
+TUNE(SetRange(-2048, 2048),
+     roleOppose,
+     roleBehind,
+     roleSharp,
+     SetRange(0, 1024),
+     roleInherit,
+     SetRange(-2048, 2048),
+     roleLmr,
+     SetRange(-768, 1024),
+     roleLmp);
+
+constexpr int    RoleTableBits = 16;
+constexpr u64    RoleTagMask   = ~u64(0xFFFF);
+std::atomic<u64> roleTable[1 << RoleTableBits];  // key tag | (role + 1025), 0 = empty
+
+// Clears this node's entry in the role table when the node is left, if it is still ours
+struct RoleGuard {
+    std::atomic<u64>* slot = nullptr;
+    u64               mine = 0;
+    ~RoleGuard() {
+        if (slot)
+        {
+            u64 expected = mine;
+            slot->compare_exchange_strong(expected, 0, std::memory_order_relaxed);
+        }
+    }
+};
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -313,6 +347,7 @@ bool Search::Worker::iterative_deepening() {
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
         (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
         (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->role                          = 0;
     }
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
@@ -1164,6 +1199,34 @@ moves_loop:  // When in check, search starts here
 
     value = bestValue;
 
+    // SMP role of this node
+    RoleGuard roleGuard;
+    int       role = rootNode ? 0 : (ss - 1)->role;
+    if (!rootNode && depth >= 2 && !excludedMove)
+    {
+        auto&     slot = roleTable[pos.key() & ((1 << RoleTableBits) - 1)];
+        const u64 tag  = pos.key() & RoleTagMask;
+        const u64 cur  = slot.load(std::memory_order_relaxed);
+        if (cur && (cur & RoleTagMask) == tag)  // another thread is searching this node
+        {
+            const int   other  = int(cur & 0xFFFF) - 1025;
+            const Value avg    = rootMoves[0].averageScore;
+            const int   behind = std::clamp(avg == -VALUE_INFINITE ? 0 : -int(avg), 0, 400);
+            const int   sharp  = std::clamp(up, 0, 256);
+            role               = std::clamp((-roleOppose * other + roleBehind * behind * 1024 / 400
+                               + roleSharp * sharp * 1024 / 256 + roleInherit * role)
+                                              / 1024,
+                                            -1024, 1024);
+        }
+        else
+        {
+            roleGuard.mine = tag | u64(role + 1025);
+            roleGuard.slot = &slot;
+            slot.store(roleGuard.mine, std::memory_order_relaxed);
+        }
+    }
+    ss->role = role;
+
     int moveCount = 0;
 
     // Step 14. Loop through all legal moves until no moves remain
@@ -1213,7 +1276,8 @@ moves_loop:  // When in check, search starts here
         if (!rootNode && pos.non_pawn_material(us) && !is_loss(bestValue))
         {
             // Skip quiet moves if movecount exceeds our threshold
-            if (moveCount >= (3 + depth * depth) / (2 - improving))
+            if (moveCount
+                >= (3 + depth * depth) * (1024 + roleLmp * role / 1024) / (1024 * (2 - improving)))
                 mp.skip_quiet_moves();
 
             // Reduced depth of the next LMR search
@@ -1369,6 +1433,7 @@ moves_loop:  // When in check, search starts here
         r -= moveCount * 65;
         r -= std::abs(correctionValue) / 26310;
         r -= lmrUp * std::clamp(up, -128, 256) / 64 + lmrDown * std::clamp(down, -128, 256) / 64;
+        r -= roleLmr * role / 1024;
 
         // Increase reduction for cut nodes
         if (cutNode)
