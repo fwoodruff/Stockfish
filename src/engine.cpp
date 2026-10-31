@@ -131,6 +131,11 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Research only: print every outermost singular extension verification search
     options.add("SampleSingular", Option(false));
 
+    // Research only: run a single full-window qsearch from the root and print its value
+    options.add("QsearchOnly", Option(false));
+    // Research only: print roughly one in N positions where search enters qsearch (0 = off)
+    options.add("SampleQsearch", Option(0, 0, 100000000));
+
     options.add(  //
       "SyzygyPath", Option("", [](const Option& o) {
           Tablebases::init(o);

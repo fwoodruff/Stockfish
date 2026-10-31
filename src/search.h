@@ -380,12 +380,14 @@ class Worker {
     usize              pvIdx, pvLast;
     RelaxedAtomic<u64> nodes, tbHits, bestMoveChanges;
     int                selDepth, nmpMinPly;
-    int                sampleEvery = 0;
-    int                headExtra   = 0;
-    bool               researchStats = false;
-    bool               sampleSingular = false;
+    int                sampleEvery     = 0;
+    int                headExtra       = 0;
+    bool               researchStats   = false;
+    bool               sampleSingular  = false;
+    bool               qsearchOnly     = false;
+    int                sampleQsEvery   = 0;
     int                singularNesting = 0;
-    u64                sampleRng   = 0;
+    u64                sampleRng       = 0;
 
     Value optimism[COLOR_NB];
 

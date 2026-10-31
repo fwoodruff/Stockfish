@@ -285,12 +285,14 @@ bool Search::Worker::iterative_deepening() {
 
     PVMoves pv;
 
-    sampleEvery   = int(options["SampleNodes"]);
-    headExtra     = int(options["HeadExtra"]);
-    researchStats = bool(options["ResearchStats"]);
+    sampleEvery     = int(options["SampleNodes"]);
+    headExtra       = int(options["HeadExtra"]);
+    researchStats   = bool(options["ResearchStats"]);
     sampleSingular  = bool(options["SampleSingular"]);
+    qsearchOnly     = bool(options["QsearchOnly"]);
+    sampleQsEvery   = int(options["SampleQsearch"]);
     singularNesting = 0;
-    sampleRng   = 0x9E3779B97F4A7C15ULL + threadIdx;
+    sampleRng       = 0x9E3779B97F4A7C15ULL + threadIdx;
 
     RootPVMoves lastBestMovePV;
     Depth       lastBestMoveDepth = 0;
@@ -321,6 +323,15 @@ bool Search::Worker::iterative_deepening() {
         (ss + i)->ply = i;
 
     ss->pv = &pv;
+
+    // Research only: one full-window qsearch from the root
+    if (qsearchOnly)
+    {
+        const Value v = qsearch<PV>(rootPos, ss, -VALUE_INFINITE, VALUE_INFINITE);
+        sync_cout << "qsvalue " << v << " static " << ss->staticEval << " incheck "
+                  << bool(rootPos.checkers()) << sync_endl;
+        return false;
+    }
 
     if (mainThread)
     {
@@ -756,7 +767,18 @@ Value Search::Worker::search(
 
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)
+    {
+        // Research only: sample positions where search enters qsearch
+        if (sampleQsEvery && !pos.checkers())
+        {
+            sampleRng ^= sampleRng >> 12, sampleRng ^= sampleRng << 25,
+              sampleRng ^= sampleRng >> 27;
+            if ((sampleRng * 2685821657736338717ULL) % u64(sampleQsEvery) == 0)
+                sync_cout << "qsroot pvnode " << PvNode << " alpha " << alpha << " beta " << beta
+                          << " fen " << pos.fen() << sync_endl;
+        }
         return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta);
+    }
 
     // Limit the depth if extensions made it too large
     depth = std::min(depth, MAX_PLY - 1);
@@ -1336,14 +1358,17 @@ moves_loop:  // When in check, search starts here
             // Research only: outcome S = singular, M = multi-cut, N = neither
             if (sampleSingular && singularNesting == 0)
                 sync_cout << "singular outcome "
-                          << (value < singularBeta ? "S" : value >= beta && !is_decisive(value) ? "M" : "N")
-                          << " nodes " << u64(nodes) - nodesBefore << " depth " << depth << " ttdepth "
-                          << ttData.depth << " pvnode " << PvNode << " cutnode " << cutNode << " ttpv "
-                          << ss->ttPv << " ttcapture " << ttCapture << " improving " << improving
-                          << " ply " << ss->ply << " alpha " << alpha << " beta " << beta << " ttvalue "
-                          << ttData.value << " static " << ss->staticEval << " sbeta " << singularBeta
-                          << " value " << value << " corr " << correctionValue << " ttmovehist "
-                          << ttMoveHistory << " fen " << pos.fen() << sync_endl;
+                          << (value < singularBeta                   ? "S"
+                              : value >= beta && !is_decisive(value) ? "M"
+                                                                     : "N")
+                          << " nodes " << u64(nodes) - nodesBefore << " depth " << depth
+                          << " ttdepth " << ttData.depth << " pvnode " << PvNode << " cutnode "
+                          << cutNode << " ttpv " << ss->ttPv << " ttcapture " << ttCapture
+                          << " improving " << improving << " ply " << ss->ply << " alpha " << alpha
+                          << " beta " << beta << " ttvalue " << ttData.value << " static "
+                          << ss->staticEval << " sbeta " << singularBeta << " value " << value
+                          << " corr " << correctionValue << " ttmovehist " << ttMoveHistory
+                          << " fen " << pos.fen() << sync_endl;
 
             if (value < singularBeta)
             {

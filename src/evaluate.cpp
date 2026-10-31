@@ -55,7 +55,8 @@ Value Eval::evaluate(const Eval::NNUE::Network&     network,
 
     assert(!pos.checkers());
     Value neighbour = VALUE_ZERO;
-    Value nnue = network.evaluate(pos, accumulators, caches, headDisagreement ? &neighbour : nullptr);
+    Value nnue =
+      network.evaluate(pos, accumulators, caches, headDisagreement ? &neighbour : nullptr);
     if (headDisagreement)
         *headDisagreement = std::abs(nnue - neighbour);
     return scale_evaluation(nnue, optimism, pos);
@@ -130,15 +131,27 @@ std::string Eval::features(Position& pos, const Eval::NNUE::Network& network) {
     std::stringstream ss;
     ss << "features";
 
-    int legal = 0, captures = 0, checks = 0;
+    int legal = 0, captures = 0, checks = 0, goodCaptures = 0, oppGoodCaptures = -1;
     for (const auto& m : MoveList<ALL>(pos))
     {
         ++legal;
         captures += pos.capture_stage(m);
         checks += pos.gives_check(m);
+        goodCaptures += pos.capture_stage(m) && pos.see_ge(m, Value(1));
+    }
+    // Winning captures for the opponent if it were their move (our hanging material)
+    if (!pos.checkers())
+    {
+        StateInfo st;
+        pos.do_null_move(st);
+        oppGoodCaptures = 0;
+        for (const auto& m : MoveList<ALL>(pos))
+            oppGoodCaptures += pos.capture_stage(m) && pos.see_ge(m, Value(1));
+        pos.undo_null_move();
     }
     ss << " incheck " << bool(pos.checkers()) << " legal " << legal << " captures " << captures
-       << " checks " << checks << " pieces " << pos.count<ALL_PIECES>() << " rule50 "
+       << " checks " << checks << " goodcaptures " << goodCaptures << " oppgoodcaptures "
+       << oppGoodCaptures << " pieces " << pos.count<ALL_PIECES>() << " rule50 "
        << pos.rule50_count() << " ply " << pos.game_ply();
 
     // to_cp(v) = round(100 * v / a), so this recovers a to well under 0.1%
