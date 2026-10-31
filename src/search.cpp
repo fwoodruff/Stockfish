@@ -92,6 +92,10 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
+// Centre of the quiet futility upside term: the offset at which the variant skips as many
+// quiet moves as master (60 UHO positions, depth 14). Measured, not tuned in games.
+constexpr int QuietFutilityUpsideCentre = -8;
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -1248,9 +1252,9 @@ moves_loop:  // When in check, search starts here
                 // (*Scaler): Generally, lower divisors scale well
                 lmrDepth += history / lmr_divisor(depth);
 
-                Value futilityValue = ss->staticEval + 119 * lmrDepth
-                                    + 90 * (ss->staticEval > alpha) + 164
-                                    + std::clamp(upside, -64, 128) / 2;
+                Value futilityValue =
+                  ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164
+                  + (std::clamp(upside, -64, 128) - QuietFutilityUpsideCentre) / 2;
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well
