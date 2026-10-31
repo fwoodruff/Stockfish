@@ -291,6 +291,8 @@ bool Search::Worker::iterative_deepening() {
     sampleSingular  = bool(options["SampleSingular"]);
     qsearchOnly     = bool(options["QsearchOnly"]);
     sampleQsEvery   = int(options["SampleQsearch"]);
+    noLmp           = bool(options["NoLMP"]);
+    sampleLmpEvery  = int(options["SampleLMP"]);
     singularNesting = 0;
     sampleRng       = 0x9E3779B97F4A7C15ULL + threadIdx;
 
@@ -1218,6 +1220,20 @@ moves_loop:  // When in check, search starts here
     if (researchStats)
         dbg_hit_on(nnEvalDone, 6);  // move-loop parents: hit = disagreement free here
 
+    // Research only: sample nodes where late move pruning can apply
+    bool        lmpSample    = false;
+    const int   lmpThreshold = (3 + depth * depth) / (2 - improving);
+    const Depth lmpDepth     = depth;
+    const Value lmpAlpha     = alpha;
+    int         lmpBestIdx   = 0;
+    bool        lmpBestQuiet = false;
+    std::string lmpTypes;
+    if (sampleLmpEvery && !rootNode && !excludedMove && pos.non_pawn_material(us))
+    {
+        sampleRng ^= sampleRng >> 12, sampleRng ^= sampleRng << 25, sampleRng ^= sampleRng >> 27;
+        lmpSample = (sampleRng * 2685821657736338717ULL) % u64(sampleLmpEvery) == 0;
+    }
+
     // Step 14. Loop through all legal moves until no moves remain
     // or a beta cutoff occurs.
     while ((move = mp.next_move()) != Move::none())
@@ -1234,6 +1250,8 @@ moves_loop:  // When in check, search starts here
             continue;
 
         ss->moveCount = ++moveCount;
+        if (lmpSample)
+            lmpTypes += '-';  // research only: becomes q/c if the move is searched
 
         if (rootNode && is_mainthread() && nodes > NODES_LIMIT_OUTPUT)
             main_manager()->updates.onIter(
@@ -1265,7 +1283,7 @@ moves_loop:  // When in check, search starts here
         if (!rootNode && pos.non_pawn_material(us) && !is_loss(bestValue))
         {
             // Skip quiet moves if movecount exceeds our threshold
-            if (moveCount >= (3 + depth * depth) / (2 - improving))
+            if (!noLmp && moveCount >= (3 + depth * depth) / (2 - improving))
                 mp.skip_quiet_moves();
 
             // Reduced depth of the next LMR search
@@ -1547,6 +1565,9 @@ moves_loop:  // When in check, search starts here
 
         assert(value > -VALUE_INFINITE && value < VALUE_INFINITE);
 
+        if (lmpSample)
+            lmpTypes[moveCount - 1] = capture ? 'c' : 'q';
+
         // Step 22. Check for a new best move
         // If a stop occurred, the value of the search cannot be trusted,
         // and we return immediately without updating the best move,
@@ -1638,6 +1659,8 @@ moves_loop:  // When in check, search starts here
             if (value + inc > alpha)
             {
                 bestMove = move;
+                if (lmpSample)
+                    lmpBestIdx = moveCount, lmpBestQuiet = !capture;
 
                 // Update PV even in fail-high case
                 if (PvNode && !rootNode)
@@ -1670,6 +1693,17 @@ moves_loop:  // When in check, search starts here
                 quietsSearched.push_back(move);
         }
     }
+
+    // Research only: report the sampled node. bestidx is the move-order position (moveCount) of the
+    // move that last raised alpha (0 if none did); types has one entry per counted move:
+    // q = searched quiet, c = searched capture, - = pruned before being searched.
+    if (lmpSample && !lmpTypes.empty())
+        sync_cout << "lmpnode depth " << lmpDepth << " improving " << improving << " threshold "
+                  << lmpThreshold << " pvnode " << PvNode << " cutnode " << cutNode << " ttmove "
+                  << bool(ttData.move) << " alpha " << lmpAlpha << " beta " << beta << " static "
+                  << ss->staticEval << " best " << bestValue << " bestidx " << lmpBestIdx
+                  << " bestquiet " << lmpBestQuiet << " types " << lmpTypes << " fen " << pos.fen()
+                  << sync_endl;
 
     // Step 23. Check for mate and stalemate, otherwise update bestmove/countermove stats
 

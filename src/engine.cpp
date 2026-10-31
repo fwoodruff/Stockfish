@@ -135,6 +135,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("QsearchOnly", Option(false));
     // Research only: print roughly one in N positions where search enters qsearch (0 = off)
     options.add("SampleQsearch", Option(0, 0, 100000000));
+    // Research only: disable late move pruning, and print roughly one in N eligible nodes
+    options.add("NoLMP", Option(false));
+    options.add("SampleLMP", Option(0, 0, 100000000));
 
     options.add(  //
       "SyzygyPath", Option("", [](const Option& o) {

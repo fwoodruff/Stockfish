@@ -386,6 +386,8 @@ class Worker {
     bool               sampleSingular  = false;
     bool               qsearchOnly     = false;
     int                sampleQsEvery   = 0;
+    bool               noLmp           = false;
+    int                sampleLmpEvery  = 0;
     int                singularNesting = 0;
     u64                sampleRng       = 0;
 

@@ -165,9 +165,8 @@ Value Network::evaluate(const Position&    pos,
     {
         const int r  = (pos.count<ALL_PIECES>() - 1) % 4;
         const int nb = pcBucket == 0 ? 1 : pcBucket == 7 ? 6 : r < 2 ? pcBucket - 1 : pcBucket + 1;
-        *neighbour =
-          static_cast<Value>(network[nb * 4 + queenBucket].propagate(transformedFeatures, nnzInfo)
-                             / OutputScale);
+        *neighbour   = static_cast<Value>(
+          network[nb * 4 + queenBucket].propagate(transformedFeatures, nnzInfo) / OutputScale);
     }
 
     return static_cast<Value>(positional / OutputScale);
