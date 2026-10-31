@@ -92,6 +92,13 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
+// The entries of the four error size tables for the position
+std::array<i16*, 4> error_size_entries(ErrorSizeHistory& h, const Position& pos) {
+    constexpr u64 Mask = ERROR_SIZE_HISTORY_SIZE - 1;
+    return {&h[0][pos.pawn_key() & Mask], &h[1][pos.minor_piece_key() & Mask],
+            &h[2][pos.non_pawn_key(WHITE) & Mask], &h[3][pos.non_pawn_key(BLACK) & Mask]};
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -1681,8 +1688,8 @@ moves_loop:  // When in check, search starts here
             const int err      = std::min(std::abs(bestValue - ss->staticEval), 4096) + 10;
             const int logErr   = 16 * msb(err) + (((err << 4) >> msb(err)) & 15);
             const int expected = 87 + 13 * std::min(std::abs(ss->staticEval), 1000) / 512;
-            auto&     entry    = errorSizeHistory[pos.pawn_key() & (ERROR_SIZE_HISTORY_SIZE - 1)];
-            entry += (4 * (logErr - expected) - entry) * std::min(int(depth), 8) / 32;
+            for (i16* entry : error_size_entries(errorSizeHistory, pos))
+                *entry += (4 * (logErr - expected) - *entry) * std::min(int(depth), 8) / 32;
         }
     }
 
@@ -1944,10 +1951,18 @@ TimePoint Search::Worker::elapsed() const {
 
 // Evaluate the current position of the game tree, from the point of view of
 // the side to move.
+// The learned error size of the static evaluation in this position, see ErrorSizeHistory
+int Search::Worker::error_size(const Position& pos) {
+    int sum = 0;
+    for (const i16* entry : error_size_entries(errorSizeHistory, pos))
+        sum += *entry;
+    return sum / 4;
+}
+
 Value Search::Worker::evaluate(const Position& pos) {
     return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,
                           optimism[pos.side_to_move()],
-                          errorSizeHistory[pos.pawn_key() & (ERROR_SIZE_HISTORY_SIZE - 1)]);
+                          error_size(pos));
 }
 
 namespace {

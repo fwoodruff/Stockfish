@@ -374,6 +374,7 @@ class Worker {
     TimePoint elapsed() const;
 
     Value evaluate(const Position&);
+    int   error_size(const Position&);
 
     LimitsType limits;
 

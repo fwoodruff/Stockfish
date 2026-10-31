@@ -60,7 +60,7 @@ Value Eval::evaluate(const Eval::NNUE::Network&     network,
 
 // Weight of the learned error size (ErrorSizeHistory) in the complexity term below. 0 = off.
 int errorComplex = 0;
-TUNE(SetRange(-1024, 1024), errorComplex);
+TUNE(SetRange(-2048, 2048), errorComplex);
 
 // Applies search-dependent scaling (optimism and rule50) to the raw NNUE eval
 Value scale_evaluation(Value nnue, int optimism, const Position& pos, int errorSize) {
