@@ -99,10 +99,12 @@ constexpr int RazorUpsideCentre = -17;
 
 // Tuning only: razoring margin, and a term for the predicted upside of the static eval
 // (internal units per standard deviation; 0 = off, razor less where the eval is likely
-// to underestimate the position). The upside weight is razorUpLow at alpha <= 0 and
-// razorUpHigh at alpha >= RazorGateWidth, linear in between: an upside that may reach
-// alpha should matter more when alpha is the difference between losing and holding.
-constexpr int RazorGateWidth = 2 * PawnValue;
+// to underestimate the position). The upside term is weighted by how much the game result
+// depends on alpha: the slope of the win rate model, approximated by a triangle peaking at
+// |alpha| = RazorStakesCentre (about +-1.00, where the win or loss rate is 50%) and falling to 0
+// at RazorStakesWidth either side, so near 0 on the draw plateau and once the game is decided.
+// razorUpLow applies when the side to move is behind (alpha < 0), razorUpHigh when ahead.
+constexpr int RazorStakesCentre = 304, RazorStakesWidth = 150;
 int           razorMargin = 342, razorUpLow = 0, razorUpHigh = 0;
 TUNE(SetRange(200, 500), razorMargin, SetRange(-512, 512), razorUpLow, razorUpHigh);
 
@@ -1038,8 +1040,9 @@ Value Search::Worker::search(
     // If eval is really low, skip search entirely and return the qsearch value
     if (allNode && !seekMate)
     {
-        const int lowWeight = 1024 - std::clamp(int(alpha), 0, RazorGateWidth) * 1024 / RazorGateWidth;
-        const int razorUp   = (razorUpLow * lowWeight + razorUpHigh * (1024 - lowWeight)) / 1024;
+        const int stakesDist = std::abs(std::abs(int(alpha)) - RazorStakesCentre);
+        const int stakes     = std::max(0, 1024 - stakesDist * 1024 / RazorStakesWidth);
+        const int razorUp    = (alpha < 0 ? razorUpLow : razorUpHigh) * stakes / 1024;
 
         if (eval < alpha - razorMargin * depth
                      - razorUp * (std::clamp(upside, -128, 256) - RazorUpsideCentre) / 64)
