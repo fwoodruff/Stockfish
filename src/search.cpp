@@ -116,6 +116,7 @@ TUNE(SetRange(-2048, 2048),
      roleLmp);
 
 constexpr int    RoleTableBits = 16;
+constexpr Depth  RoleMinDepth  = 4;  // shallower nodes inherit their role without the table
 constexpr u64    RoleTagMask   = ~u64(0xFFFF);
 std::atomic<u64> roleTable[1 << RoleTableBits];  // key tag | (role + 1025), 0 = empty
 
@@ -1202,7 +1203,7 @@ moves_loop:  // When in check, search starts here
     // SMP role of this node
     RoleGuard roleGuard;
     int       role = rootNode ? 0 : (ss - 1)->role;
-    if (!rootNode && depth >= 2 && !excludedMove)
+    if (!rootNode && depth >= RoleMinDepth && !excludedMove)
     {
         auto&     slot = roleTable[pos.key() & ((1 << RoleTableBits) - 1)];
         const u64 tag  = pos.key() & RoleTagMask;
