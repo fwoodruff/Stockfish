@@ -50,6 +50,24 @@
 #include "uci.h"
 #include "ucioption.h"
 
+#include <cmath>
+#include <cstdio>
+
+// Research only: online error tables keyed by pawn structure, to test whether the size of the
+// static eval's error can be learned during a game (see research/online_variance.py). Each
+// logged line holds the tables' predictions made before they learn from that node.
+namespace OnlineVar {
+constexpr int      Size = 16384;
+float              sgn[Size], mag[Size];
+int                cnt[Size];
+unsigned long long seen = 0;
+void               clear() {
+    for (int i = 0; i < Size; ++i)
+        sgn[i] = mag[i] = 0, cnt[i] = 0;
+    std::fprintf(stderr, "OVGAME\n");
+}
+}
+
 namespace Stockfish {
 
 inline int lmr_divisor(int depth) {
@@ -712,6 +730,7 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
+    OnlineVar::clear();
     mainHistory.fill(-5);
     captureHistory.fill(-742);
 
@@ -1665,6 +1684,25 @@ moves_loop:  // When in check, search starts here
 
     // Adjust correction history if the best move is not a capture and
     // the error direction matches whether we are above/below bounds.
+    if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
+        && (bestValue > ss->staticEval) == bool(bestMove) && !is_decisive(bestValue)
+        && is_valid(unadjustedStaticEval))
+    {
+        using namespace OnlineVar;
+        const auto  ev   = evaluate(pos);
+        const int   idx  = pos.pawn_key() & (Size - 1);
+        const float eRaw = float(bestValue - unadjustedStaticEval);
+        const float eCor = float(bestValue - ss->staticEval);
+        const float mt   = std::log(std::abs(eCor) + 10.0f);
+        const float w    = std::min(int(depth), 8) / 32.0f;
+        const int   bnd  = bestValue >= beta ? 2 : PvNode && bestMove ? 1 : 0;
+        if ((++seen & 63) == 0)
+            std::fprintf(stderr, "OV %d %d %d %.0f %.0f %d %d %.2f %.4f %d\n", int(depth), bnd,
+                         ss->ply, eRaw, eCor, ev.down, ev.up, sgn[idx], mag[idx], cnt[idx]);
+        sgn[idx] += (eRaw - sgn[idx]) * w;
+        mag[idx] = cnt[idx] ? mag[idx] + (mt - mag[idx]) * w : mt;
+        cnt[idx]++;
+    }
     if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
         && (bestValue > ss->staticEval) == bool(bestMove))
     {
