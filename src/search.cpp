@@ -93,6 +93,10 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
+// Centre of the razoring upside term: at razorUp = 256 the variant razors as many nodes as
+// master (60 UHO positions, depth 14)
+constexpr int RazorUpsideCentre = -17;
+
 // Tuning only: razoring margin, and a term for the predicted upside of the static eval
 // (internal units per standard deviation; 0 = off, razor less where the eval is likely
 // to underestimate the position)
@@ -1029,7 +1033,9 @@ Value Search::Worker::search(
 
     // Step 8. Razoring
     // If eval is really low, skip search entirely and return the qsearch value
-    if (allNode && eval < alpha - razorMargin * depth - razorUp * std::clamp(upside, -128, 256) / 64
+    if (allNode
+        && eval < alpha - razorMargin * depth
+                    - razorUp * (std::clamp(upside, -128, 256) - RazorUpsideCentre) / 64
         && !seekMate)
         return qsearch<NonPV>(pos, ss, alpha, beta);
 
