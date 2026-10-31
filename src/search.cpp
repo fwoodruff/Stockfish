@@ -102,6 +102,10 @@ TUNE(SetRange(25, 65),
      SetRange(-128, 192),
      riskScale);
 
+// Centre of the futility risk term: the offset at which the variant prunes as often as
+// master (60 UHO positions, depth 14). Measured, not tuned in games.
+constexpr int FutilityRiskCentre = 4;
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -1046,7 +1050,7 @@ Value Search::Worker::search(
         Value futilityMargin = futilityMult * depth
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
                              + int(std::abs(i64(correctionValue)) * corrScale / (198435 * 64))
-                             + std::clamp(risk, -64, 128) * riskScale / 64;
+                             + (std::clamp(risk, -64, 128) - FutilityRiskCentre) * riskScale / 64;
 
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
