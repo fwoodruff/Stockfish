@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -91,6 +92,12 @@ const std::array<int, MAX_MOVES> reductions = [] {
 
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
+
+// Tuning only: razoring margin, and a term for the predicted upside of the static eval
+// (internal units per standard deviation; 0 = off, razor less where the eval is likely
+// to underestimate the position)
+int razorMargin = 342, razorUp = 0;
+TUNE(SetRange(200, 500), razorMargin, SetRange(-512, 512), razorUp);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
@@ -1022,7 +1029,8 @@ Value Search::Worker::search(
 
     // Step 8. Razoring
     // If eval is really low, skip search entirely and return the qsearch value
-    if (allNode && eval < alpha - 342 * depth && !seekMate)
+    if (allNode && eval < alpha - razorMargin * depth - razorUp * std::clamp(upside, -128, 256) / 64
+        && !seekMate)
         return qsearch<NonPV>(pos, ss, alpha, beta);
 
     // Step 9. Futility pruning: child node
@@ -1248,9 +1256,8 @@ moves_loop:  // When in check, search starts here
                 // (*Scaler): Generally, lower divisors scale well
                 lmrDepth += history / lmr_divisor(depth);
 
-                Value futilityValue = ss->staticEval + 119 * lmrDepth
-                                    + 90 * (ss->staticEval > alpha) + 164
-                                    + std::clamp(upside, -64, 128) / 2;
+                Value futilityValue =
+                  ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well
