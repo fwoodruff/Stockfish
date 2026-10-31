@@ -1697,8 +1697,9 @@ moves_loop:  // When in check, search starts here
         const float w    = std::min(int(depth), 8) / 32.0f;
         const int   bnd  = bestValue >= beta ? 2 : PvNode && bestMove ? 1 : 0;
         if ((++seen & 63) == 0)
-            std::fprintf(stderr, "OV %d %d %d %.0f %.0f %d %d %.2f %.4f %d\n", int(depth), bnd,
-                         ss->ply, eRaw, eCor, ev.down, ev.up, sgn[idx], mag[idx], cnt[idx]);
+            std::fprintf(stderr, "OV %d %d %d %.0f %.0f %d %d %.2f %.4f %d %d\n", int(depth), bnd,
+                         ss->ply, eRaw, eCor, ev.down, ev.up, sgn[idx], mag[idx], cnt[idx],
+                         int(ss->staticEval));
         sgn[idx] += (eRaw - sgn[idx]) * w;
         mag[idx] = cnt[idx] ? mag[idx] + (mt - mag[idx]) * w : mt;
         cnt[idx]++;
