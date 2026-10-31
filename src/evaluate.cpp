@@ -32,6 +32,7 @@
 #include "nnue/nnue_misc.h"
 #include "position.h"
 #include "types.h"
+#include "tune.h"
 #include "uci.h"
 #include "nnue/nnue_accumulator.h"
 
@@ -43,7 +44,7 @@ static int simple_eval(const Position& pos) {
          - pos.non_pawn_material(~c);
 }
 
-Value scale_evaluation(Value nnue, int optimism, const Position& pos);
+Value scale_evaluation(Value nnue, int optimism, const Position& pos, int sharpness = 0);
 
 Eval::Evaluation Eval::evaluate(const Eval::NNUE::Network&     network,
                                 const Position&                pos,
@@ -53,11 +54,16 @@ Eval::Evaluation Eval::evaluate(const Eval::NNUE::Network&     network,
 
     assert(!pos.checkers());
     const auto [nnue, down, up] = network.evaluate(pos, accumulators, caches);
-    return {scale_evaluation(nnue, optimism, pos), down, up};
+    return {scale_evaluation(nnue, optimism, pos, down + up), down, up};
 }
 
+// Weight of the network's predicted eval risk (sharpness = down + up, 64 per standard deviation
+// each) in the complexity term below, and the sharpness at which it is neutral. 0 = off.
+int riskComplex = 0, riskComplexCentre = -11;
+TUNE(SetRange(-1024, 1024), riskComplex, SetRange(-256, 256), riskComplexCentre);
+
 // Applies search-dependent scaling (optimism and rule50) to the raw NNUE eval
-Value scale_evaluation(Value nnue, int optimism, const Position& pos) {
+Value scale_evaluation(Value nnue, int optimism, const Position& pos, int sharpness) {
     Value se = simple_eval(pos);
 
     // Normalize the raw evaluations to [-1024, 1024] to measure their correlation.
@@ -67,6 +73,11 @@ Value scale_evaluation(Value nnue, int optimism, const Position& pos) {
     // otherwise (negative correlation) it involves complex compensation. In a representative
     // sample, correl averages -1 or so, i.e. it is well-centered in [-2048, 2048].
     int correl = (se_norm * nnue_norm) / 512;
+
+    // A sharper position, by the network's own risk estimate, is more complex
+    correl =
+      std::clamp(correl - riskComplex * (std::clamp(sharpness, -256, 512) - riskComplexCentre) / 64,
+                 -2048, 2048);
 
     // When winning, we boost easy positions, and vice versa
     int v = nnue + (nnue + optimism) * correl / 65536;
@@ -107,7 +118,7 @@ std::string Eval::trace(Position& pos, const Eval::NNUE::Network& network) {
         auto o = network.evaluate(pos, *accumulators, *caches);
         ss << "RISKDBG " << std::noshowpos << o.down << " " << o.up << "\n";
     }
-    Value s_v  = scale_evaluation(nnue, VALUE_ZERO, pos);  // requires stm perspective
+    Value s_v = scale_evaluation(nnue, VALUE_ZERO, pos);  // requires stm perspective
 
     ss << "NNUE evaluation          " << nnue << " (side to move, internal units)\n";
 
