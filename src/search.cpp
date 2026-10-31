@@ -103,6 +103,11 @@ TUNE(SetRange(-1536, 1536), lmrUp, lmrDown);
 int razorUp = 0, razorDown = 0;
 TUNE(SetRange(-512, 512), razorUp, razorDown);
 
+// Centres for the razoring risk terms, chosen so that at razorUp = 256 or razorDown = -256
+// the number of razored nodes matches master on 60 UHO positions at depth 14
+int razorUpOffset = -17, razorDownOffset = 8;
+TUNE(SetRange(-64, 64), razorUpOffset, razorDownOffset);
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -1036,8 +1041,8 @@ Value Search::Worker::search(
     // Step 8. Razoring
     // If eval is really low, skip search entirely and return the qsearch value
     if (allNode
-        && eval < alpha - 342 * depth - razorUp * std::clamp(up, -128, 256) / 64
-                    - razorDown * std::clamp(down, -128, 256) / 64
+        && eval < alpha - 342 * depth - razorUp * (std::clamp(up, -128, 256) - razorUpOffset) / 64
+                    - razorDown * (std::clamp(down, -128, 256) - razorDownOffset) / 64
         && !seekMate)
         return qsearch<NonPV>(pos, ss, alpha, beta);
 
