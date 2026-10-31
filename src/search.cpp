@@ -93,10 +93,6 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
-// Centre of the razoring upside term: at razorUp = 256 the variant razors as many nodes as
-// master (60 UHO positions, depth 14)
-constexpr int RazorUpsideCentre = -17;
-
 // Tuning only: razoring margin, and a term for the predicted upside of the static eval
 // (internal units per standard deviation; 0 = off, razor less where the eval is likely
 // to underestimate the position). The upside term is weighted by how much the game result
@@ -104,6 +100,10 @@ constexpr int RazorUpsideCentre = -17;
 // |alpha| = RazorStakesCentre (about +-1.00, where the win or loss rate is 50%) and falling to 0
 // at RazorStakesWidth either side, so near 0 on the draw plateau and once the game is decided.
 // razorUpLow applies when the side to move is behind (alpha < 0), razorUpHigh when ahead.
+// The upside rises with the eval itself, so only its excess over the average at that eval is
+// used (fitted on 3.9M fresh evaluations at razoring checks in searches from 400 positions of
+// 10+0.1 games; at razorUp = 256 each band razors within 1-5% as many nodes as master).
+// Without a fresh evaluation (static eval from the TT) the upside is unknown and not used.
 constexpr int RazorStakesCentre = 304, RazorStakesWidth = 150;
 int           razorMargin = 342, razorUpLow = 0, razorUpHigh = 0;
 TUNE(SetRange(200, 500), razorMargin, SetRange(-512, 512), razorUpLow, razorUpHigh);
@@ -861,7 +861,8 @@ Value Search::Worker::search(
 
     // Step 5. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
-    int   upside               = 0;  // only known with a fresh evaluation
+    int   upside               = 0;
+    bool  upsideKnown          = false;  // only with a fresh evaluation
 
     // Skip early pruning when in check
     if (ss->inCheck)
@@ -877,6 +878,7 @@ Value Search::Worker::search(
             const auto evaluation = evaluate(pos);
             unadjustedStaticEval  = evaluation.value;
             upside                = evaluation.upside;
+            upsideKnown           = true;
         }
 
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
@@ -891,6 +893,7 @@ Value Search::Worker::search(
         const auto evaluation = evaluate(pos);
         unadjustedStaticEval  = evaluation.value;
         upside                = evaluation.upside;
+        upsideKnown           = true;
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // Static evaluation is saved as it was before adjustment by correction history
@@ -1042,10 +1045,12 @@ Value Search::Worker::search(
     {
         const int stakesDist = std::abs(std::abs(int(alpha)) - RazorStakesCentre);
         const int stakes     = std::max(0, 1024 - stakesDist * 1024 / RazorStakesWidth);
-        const int razorUp    = (alpha < 0 ? razorUpLow : razorUpHigh) * stakes / 1024;
+        const int razorUp =
+          upsideKnown ? (alpha < 0 ? razorUpLow : razorUpHigh) * stakes / 1024 : 0;
+        const int expectedUpside = 10 + 13 * std::clamp(int(eval), -1600, 1600) / 256;
 
         if (eval < alpha - razorMargin * depth
-                     - razorUp * (std::clamp(upside, -128, 256) - RazorUpsideCentre) / 64)
+                     - razorUp * (std::clamp(upside, -128, 256) - expectedUpside) / 64)
             return qsearch<NonPV>(pos, ss, alpha, beta);
     }
 
