@@ -99,9 +99,12 @@ constexpr int RazorUpsideCentre = -17;
 
 // Tuning only: razoring margin, and a term for the predicted upside of the static eval
 // (internal units per standard deviation; 0 = off, razor less where the eval is likely
-// to underestimate the position)
-int razorMargin = 342, razorUp = 0;
-TUNE(SetRange(200, 500), razorMargin, SetRange(-512, 512), razorUp);
+// to underestimate the position). The upside weight is razorUpLow at alpha <= 0 and
+// razorUpHigh at alpha >= RazorGateWidth, linear in between: an upside that may reach
+// alpha should matter more when alpha is the difference between losing and holding.
+constexpr int RazorGateWidth = 2 * PawnValue;
+int           razorMargin = 342, razorUpLow = 0, razorUpHigh = 0;
+TUNE(SetRange(200, 500), razorMargin, SetRange(-512, 512), razorUpLow, razorUpHigh);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
@@ -1033,11 +1036,15 @@ Value Search::Worker::search(
 
     // Step 8. Razoring
     // If eval is really low, skip search entirely and return the qsearch value
-    if (allNode
-        && eval < alpha - razorMargin * depth
-                    - razorUp * (std::clamp(upside, -128, 256) - RazorUpsideCentre) / 64
-        && !seekMate)
-        return qsearch<NonPV>(pos, ss, alpha, beta);
+    if (allNode && !seekMate)
+    {
+        const int lowWeight = 1024 - std::clamp(int(alpha), 0, RazorGateWidth) * 1024 / RazorGateWidth;
+        const int razorUp   = (razorUpLow * lowWeight + razorUpHigh * (1024 - lowWeight)) / 1024;
+
+        if (eval < alpha - razorMargin * depth
+                     - razorUp * (std::clamp(upside, -128, 256) - RazorUpsideCentre) / 64)
+            return qsearch<NonPV>(pos, ss, alpha, beta);
+    }
 
     // Step 9. Futility pruning: child node
     // The depth condition is important for mate finding. It should NOT be tuned.
