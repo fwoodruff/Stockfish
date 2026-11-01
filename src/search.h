@@ -335,6 +335,7 @@ class Worker {
     CorrectionHistory<Continuation> continuationCorrectionHistory;
 
     TTMoveHistory    ttMoveHistory;
+    ErrorSizeHistory errorSizeHistory;
     SharedHistories& sharedHistory;
     ContinuationHistory (&continuationHistory)[2][2];
 
@@ -373,6 +374,7 @@ class Worker {
     TimePoint elapsed() const;
 
     Value evaluate(const Position&);
+    int   error_scale(const Position&);
 
     LimitsType limits;
 
