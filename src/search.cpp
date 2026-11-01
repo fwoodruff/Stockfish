@@ -853,6 +853,7 @@ Value Search::Worker::search(
 
     // Step 5. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
+    int   errorScale           = 1024;
 
     // Skip early pruning when in check
     if (ss->inCheck)
@@ -1010,6 +1011,9 @@ Value Search::Worker::search(
     if (ss->inCheck)
         goto moves_loop;
 
+    // Futility margins below widen where the static eval error has been large
+    errorScale = error_scale(pos);
+
     // Use static evaluation difference to improve quiet move ordering
     if (((ss - 1)->currentMove).is_ok() && !(ss - 1)->inCheck && !priorCapture)
     {
@@ -1023,8 +1027,7 @@ Value Search::Worker::search(
 
     // Step 8. Razoring
     // If eval is really low, skip search entirely and return the qsearch value
-    // (here and in futility pruning, margins widen where the eval error has been large)
-    if (allNode && !seekMate && eval < alpha - 342 * depth * error_scale(pos) / 1024)
+    if (allNode && !seekMate && eval < alpha - 342 * depth * errorScale / 1024)
         return qsearch<NonPV>(pos, ss, alpha, beta);
 
     // Step 9. Futility pruning: child node
@@ -1035,7 +1038,7 @@ Value Search::Worker::search(
         Value futilityMult = std::min(45 + depth * 4, 85);
         futilityMult -= 20 * !ss->ttHit;
 
-        Value futilityMargin = futilityMult * depth * error_scale(pos) / 1024
+        Value futilityMargin = futilityMult * depth * errorScale / 1024
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
                              + std::abs(correctionValue) / 198435;
 
@@ -1250,8 +1253,9 @@ moves_loop:  // When in check, search starts here
                 // (*Scaler): Generally, lower divisors scale well
                 lmrDepth += history / lmr_divisor(depth);
 
-                Value futilityValue =
-                  ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
+                Value futilityValue = ss->staticEval + 119 * lmrDepth
+                                    + 90 * (ss->staticEval > alpha) + 164
+                                    + 119 * std::max(lmrDepth, 0) * (errorScale - 1024) / 1024;
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well
