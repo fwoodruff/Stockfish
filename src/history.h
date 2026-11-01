@@ -145,6 +145,12 @@ using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory = DynStats<AtomicStats<i16, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
 
+// ErrorSizeHistory records how much larger or smaller than usual the error of the static
+// evaluation has been in this game (log scale: 64 = doubling), in four tables addressed by the
+// pawn, minor piece and each side's non-pawn structure, which are averaged when read
+constexpr int ERROR_SIZE_HISTORY_SIZE = 16384;
+using ErrorSizeHistory                = MultiArray<i16, 4, ERROR_SIZE_HISTORY_SIZE>;
+
 // Correction histories record differences between the static evaluation of
 // positions and their search score. It is used to improve the static evaluation
 // used by some search heuristics.

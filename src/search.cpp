@@ -92,6 +92,13 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
+// The entries of the four error size tables for the position
+std::array<i16*, 4> error_size_entries(ErrorSizeHistory& h, const Position& pos) {
+    constexpr u64 Mask = ERROR_SIZE_HISTORY_SIZE - 1;
+    return {&h[0][pos.pawn_key() & Mask], &h[1][pos.minor_piece_key() & Mask],
+            &h[2][pos.non_pawn_key(WHITE) & Mask], &h[3][pos.non_pawn_key(BLACK) & Mask]};
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -713,6 +720,7 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
     mainHistory.fill(-5);
+    errorSizeHistory.fill(i16(0));
     captureHistory.fill(-742);
 
     // Each thread clears its part of the dynamically-sized shared histories.
@@ -1015,7 +1023,8 @@ Value Search::Worker::search(
 
     // Step 8. Razoring
     // If eval is really low, skip search entirely and return the qsearch value
-    if (allNode && eval < alpha - 342 * depth && !seekMate)
+    // (here and in futility pruning, margins widen where the eval error has been large)
+    if (allNode && !seekMate && eval < alpha - 342 * depth * error_scale(pos) / 1024)
         return qsearch<NonPV>(pos, ss, alpha, beta);
 
     // Step 9. Futility pruning: child node
@@ -1026,7 +1035,7 @@ Value Search::Worker::search(
         Value futilityMult = std::min(45 + depth * 4, 85);
         futilityMult -= 20 * !ss->ttHit;
 
-        Value futilityMargin = futilityMult * depth
+        Value futilityMargin = futilityMult * depth * error_scale(pos) / 1024
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
                              + std::abs(correctionValue) / 198435;
 
@@ -1672,6 +1681,17 @@ moves_loop:  // When in check, search starts here
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 18) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
         update_correction_history(pos, ss, *this, 1061 * bonus / 1024);
+
+        // Learn the size of the error on a log scale (16 per doubling), relative to its usual
+        // size at this eval, which grows with |eval|
+        if (!is_decisive(bestValue))
+        {
+            const int err      = std::min(std::abs(bestValue - ss->staticEval), 4096) + 10;
+            const int logErr   = 16 * msb(err) + (((err << 4) >> msb(err)) & 15);
+            const int expected = 87 + 13 * std::min(std::abs(ss->staticEval), 1000) / 512;
+            for (i16* entry : error_size_entries(errorSizeHistory, pos))
+                *entry += (4 * (logErr - expected) - *entry) * std::min(int(depth), 8) / 32;
+        }
     }
 
     // The search is now complete
@@ -1929,6 +1949,17 @@ TimePoint Search::Worker::elapsed() const {
     return main_manager()->tm.elapsed([this]() { return threads.nodes_searched(); });
 }
 
+
+// How much larger than usual the static evaluation error in this position has been, scaled
+// so 1024 is the usual size. The tables hold its log2 in steps of 1/64 (see ErrorSizeHistory),
+// which is inverted the same piecewise-linear way it was taken.
+int Search::Worker::error_scale(const Position& pos) {
+    int sum = 0;
+    for (const i16* entry : error_size_entries(errorSizeHistory, pos))
+        sum += *entry;
+    const int logScale = std::clamp(sum / 4, -128, 127);
+    return (64 + (logScale & 63)) << (4 + (logScale >> 6));
+}
 
 // Evaluate the current position of the game tree, from the point of view of
 // the side to move.
