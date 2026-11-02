@@ -1827,13 +1827,17 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
                 if (moveCount > 2)
                     continue;
 
-                Value futilityValue = futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+                Value captured      = PieceValue[pos.piece_on(move.to_sq())];
+                Value futilityValue = futilityBase + captured;
 
                 // If static eval + value of piece we are going to capture is
-                // much lower than alpha, we can prune this move.
-                if (futilityValue <= alpha)
+                // much lower than alpha, we can prune this move. Captures that win
+                // the piece outright are kept near the margin: they beat alpha far
+                // more often than other captures there.
+                if (futilityValue <= alpha + 100
+                    && (futilityValue <= alpha - 300 || !pos.see_ge(move, captured)))
                 {
-                    bestValue = std::max(bestValue, futilityValue);
+                    bestValue = std::max(bestValue, std::min(alpha, futilityValue));
                     continue;
                 }
 
