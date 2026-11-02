@@ -1026,7 +1026,8 @@ Value Search::Worker::search(
         Value futilityMult = std::min(45 + depth * 4, 85);
         futilityMult -= 20 * !ss->ttHit;
 
-        Value futilityMargin = futilityMult * depth
+        // At expected ALL nodes, prunes just inside the margin are wrong about three times as often
+        Value futilityMargin = (futilityMult + (allNode ? 160 : -16)) * depth
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
                              + std::abs(correctionValue) / 198435;
 
