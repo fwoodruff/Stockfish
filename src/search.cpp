@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -67,6 +68,14 @@ void syzygy_extend_pv(const OptionsMap&            options,
                       const usize                  multiPV);
 
 using namespace Search;
+
+// Futility margin scale by search phase (SPSA). The phase comes from the fraction of the optimum time used:
+// 0 before 10%, 1 before 75%, then 2 under the first root move and 3 under later root moves.
+int phaseFutility[4] = {1024, 1024, 1024, 1024};
+TUNE(SetRange(512, 2048), phaseFutility);
+
+// Set by the main thread in check_time(): 0, 1, or 2 when late
+std::atomic<int> timePhase{0};
 
 namespace {
 
@@ -213,6 +222,7 @@ void Search::Worker::start_searching() {
 
     main_manager()->tm.init(limits, rootPos.side_to_move(), rootPos.game_ply(), options,
                             main_manager()->originalTimeAdjust);
+    timePhase.store(0, std::memory_order_relaxed);
     tt.new_search();
     main_manager()->updates.onStart();
 
@@ -786,8 +796,11 @@ Value Search::Worker::search(
     priorCapture  = pos.captured_piece();
     Color us      = pos.side_to_move();
     ss->moveCount = 0;
-    bestValue     = -VALUE_INFINITE;
-    maxValue      = VALUE_INFINITE;
+
+    const int tp        = timePhase.load(std::memory_order_relaxed);
+    const int phaseMult = phaseFutility[tp < 2 ? tp : 2 + ((ss - ss->ply)->moveCount > 1)];
+    bestValue           = -VALUE_INFINITE;
+    maxValue            = VALUE_INFINITE;
 
     ss->followPV = rootNode
                 || ((ss - 1)->followPV
@@ -1026,9 +1039,10 @@ Value Search::Worker::search(
         Value futilityMult = std::min(45 + depth * 4, 85);
         futilityMult -= 20 * !ss->ttHit;
 
-        Value futilityMargin = futilityMult * depth
-                             - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
-                             + std::abs(correctionValue) / 198435;
+        Value futilityMargin =
+          (futilityMult * depth - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
+           + std::abs(correctionValue) / 198435)
+          * phaseMult / 1024;
 
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
@@ -1242,7 +1256,8 @@ moves_loop:  // When in check, search starts here
                 lmrDepth += history / lmr_divisor(depth);
 
                 Value futilityValue =
-                  ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
+                  ss->staticEval
+                  + (119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164) * phaseMult / 1024;
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well
@@ -2146,6 +2161,12 @@ void SearchManager::check_time(Search::Worker& worker) {
 
     TimePoint elapsed = tm.elapsed([&worker]() { return worker.threads.nodes_searched(); });
     TimePoint tick    = worker.limits.startTime + elapsed;
+
+    if (worker.limits.use_time_management())
+        timePhase.store(elapsed * 10 < tm.optimum()      ? 0
+                        : elapsed * 4 < tm.optimum() * 3 ? 1
+                                                         : 2,
+                        std::memory_order_relaxed);
 
     if (tick - lastInfoTime >= 1000)
     {
