@@ -1396,6 +1396,17 @@ moves_loop:  // When in check, search starts here
         // Apply the computed LMR
         if (depth >= 2 && moveCount > 1)
         {
+            // Probe the move with a quiescence search at alpha: reduce less if it
+            // already beats alpha, more if it falls far short
+            if (depth >= 6)
+            {
+                const Value probe = -qsearch<NonPV>(pos, ss + 1, -(alpha + 1), -alpha);
+                if (probe > alpha)
+                    r -= 1024;
+                else if (probe <= alpha - 200)
+                    r += 1024;
+            }
+
             // In general we want to cap the LMR depth search at newDepth, but when
             // reduction is negative, we allow this move a limited search extension
             // beyond the first move depth. To avoid search explosion, extensions
