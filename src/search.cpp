@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -67,6 +68,10 @@ void syzygy_extend_pv(const OptionsMap&            options,
                       const usize                  multiPV);
 
 using namespace Search;
+
+// Futility margin multiplier by search phase (SPSA), indexed by Worker::search_phase()
+int phaseFutility[4] = {1024, 1024, 1024, 1024};
+TUNE(SetRange(512, 2048), phaseFutility);
 
 namespace {
 
@@ -639,6 +644,8 @@ bool Search::Worker::iterative_deepening() {
         iterIdx                        = (iterIdx + 1) & 3;
     }
 
+    previousRootDepth = rootDepth;
+
     if (!mainThread)
         return false;
 
@@ -712,6 +719,7 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
+    previousRootDepth = 0;
     mainHistory.fill(-5);
     captureHistory.fill(-742);
 
@@ -786,8 +794,10 @@ Value Search::Worker::search(
     priorCapture  = pos.captured_piece();
     Color us      = pos.side_to_move();
     ss->moveCount = 0;
-    bestValue     = -VALUE_INFINITE;
-    maxValue      = VALUE_INFINITE;
+
+    const int phaseMult = phaseFutility[search_phase(ss)];
+    bestValue           = -VALUE_INFINITE;
+    maxValue            = VALUE_INFINITE;
 
     ss->followPV = rootNode
                 || ((ss - 1)->followPV
@@ -1029,6 +1039,7 @@ Value Search::Worker::search(
         Value futilityMargin = futilityMult * depth
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
                              + std::abs(correctionValue) / 198435;
+        futilityMargin = futilityMargin * phaseMult / 1024;
 
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
@@ -1241,8 +1252,8 @@ moves_loop:  // When in check, search starts here
                 // (*Scaler): Generally, lower divisors scale well
                 lmrDepth += history / lmr_divisor(depth);
 
-                Value futilityValue =
-                  ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
+                int   futilityMargin = 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
+                Value futilityValue  = ss->staticEval + futilityMargin * phaseMult / 1024;
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well
@@ -1914,6 +1925,13 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // The search is now complete
     assert(-VALUE_INFINITE < bestValue && bestValue < VALUE_INFINITE);
     return bestValue;
+}
+
+// Search phase of this thread, from its iteration depth relative to the depth its previous search reached:
+// 0 more than 6 plies short, 1 more than 1 ply short, then 2 under the first root move and 3 under later ones.
+int Search::Worker::search_phase(const Stack* ss) const {
+    const int gap = previousRootDepth - rootDepth;
+    return gap > 6 ? 0 : gap > 1 ? 1 : 2 + ((ss - ss->ply)->moveCount > 1);
 }
 
 int Search::Worker::reduction(bool i, Depth d, int mn) const {

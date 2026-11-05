@@ -362,6 +362,7 @@ class Worker {
     Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta);
 
     int reduction(bool i, Depth d, int mn) const;
+    int search_phase(const Stack* ss) const;
 
     // Pointer to the search manager, only allowed to be called by the main thread
     SearchManager* main_manager() const {
@@ -386,7 +387,8 @@ class Worker {
     StateInfo rootState;
     RootMoves rootMoves;
     Depth     rootDepth;
-    bool      seekMate = false;
+    Depth     previousRootDepth = 0;
+    bool      seekMate          = false;
 
     PVMoves lastIterationIdxPV;
 
