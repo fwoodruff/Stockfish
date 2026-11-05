@@ -68,6 +68,9 @@ void syzygy_extend_pv(const OptionsMap&            options,
 
 using namespace Search;
 
+// Key of a (position, move) pair in the move outcome table
+u64 move_outcome_key(Key posKey, Move m) { return posKey ^ (u64(m.raw()) * 0x9E3779B97F4A7C15ULL); }
+
 namespace {
 
 constexpr u64 NODES_LIMIT_OUTPUT = 10'000'000;
@@ -712,6 +715,7 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
+    moveOutcomes.fill({});
     mainHistory.fill(-5);
     captureHistory.fill(-742);
 
@@ -1393,6 +1397,16 @@ moves_loop:  // When in check, search starts here
         if (seekMate && r > 0)
             r += (givesCheck ? -r : r) / 4;
 
+        // Reduce more for moves that failed low by a wide margin the last time
+        // they were searched at this node
+        if (depth >= 10)
+        {
+            const u64          k = move_outcome_key(posKey, move);
+            const MoveOutcome& e = moveOutcomes[k >> 48];
+            if (e.key == u32(k) && e.margin <= -200)
+                r += 1024;
+        }
+
         // Apply the computed LMR
         if (depth >= 2 && moveCount > 1)
         {
@@ -1468,6 +1482,13 @@ moves_loop:  // When in check, search starts here
         // principal variation or transposition table.
         if (threads.stop.load(std::memory_order_relaxed))
             return VALUE_ZERO;
+
+        // Remember how this move did at this node
+        if (depth >= 9)
+        {
+            const u64 k           = move_outcome_key(posKey, move);
+            moveOutcomes[k >> 48] = {u32(k), i16(std::clamp(int(value - alpha), -2000, 2000))};
+        }
 
         if (rootNode)
         {

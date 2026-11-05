@@ -334,8 +334,15 @@ class Worker {
     CapturePieceToHistory           captureHistory;
     CorrectionHistory<Continuation> continuationCorrectionHistory;
 
-    TTMoveHistory    ttMoveHistory;
-    SharedHistories& sharedHistory;
+    TTMoveHistory ttMoveHistory;
+
+    // Result minus alpha of the last search of a move at a deep node, keyed by position and move
+    struct MoveOutcome {
+        u32 key;
+        i16 margin;
+    };
+    std::array<MoveOutcome, 65536> moveOutcomes;
+    SharedHistories&               sharedHistory;
     ContinuationHistory (&continuationHistory)[2][2];
 
    private:
