@@ -1397,17 +1397,18 @@ moves_loop:  // When in check, search starts here
         if (depth >= 2 && moveCount > 1)
         {
             // Probe the move with a quiescence search at alpha, without writing to the
-            // TT: reduce less if it already beats alpha, more if it falls far short
+            // TT. Reduce up to two plies less if it already beats alpha, and outside
+            // PV nodes up to two plies more the further it falls short.
             if (depth >= 10)
             {
-                probing           = true;
-                const Value probe = -qsearch<NonPV>(pos, ss + 1, -(alpha + 1), -alpha);
-                probing           = false;
+                probing            = true;
+                const int probeGap = -qsearch<NonPV>(pos, ss + 1, -(alpha + 1), -alpha) - alpha;
+                probing            = false;
 
-                if (probe > alpha)
-                    r -= 1024;
-                else if (probe <= alpha - 200)
-                    r += 512;
+                if (probeGap > 0)
+                    r -= std::min(1024 + 10 * probeGap, 2048);
+                else if (!PvNode)
+                    r += std::clamp(-7 * (probeGap + 100), 0, 2048);
             }
 
             // In general we want to cap the LMR depth search at newDepth, but when
