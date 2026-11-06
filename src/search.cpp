@@ -69,8 +69,8 @@ void syzygy_extend_pv(const OptionsMap&            options,
 using namespace Search;
 
 // Futility margin multiplier by search phase, indexed by Worker::search_phase():
-// prune harder once the best move has probably been found, under later root moves most
-constexpr int phaseFutility[4] = {1024, 984, 1048, 880};
+// lax while catching up to fill the TT, harder once the best move has probably been found
+constexpr int phaseFutility[4] = {1072, 984, 1048, 880};
 
 namespace {
 
