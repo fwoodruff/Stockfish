@@ -1398,7 +1398,7 @@ moves_loop:  // When in check, search starts here
         {
             // Probe the move with a quiescence search at alpha, without writing to the
             // TT: reduce less if it already beats alpha, more if it falls far short
-            if (depth >= 6)
+            if (depth >= 10)
             {
                 probing           = true;
                 const Value probe = -qsearch<NonPV>(pos, ss + 1, -(alpha + 1), -alpha);
