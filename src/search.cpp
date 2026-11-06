@@ -46,11 +46,18 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
 
 namespace Stockfish {
+
+// SPSA: LMR alpha - eval term, slope in 1/16 ply per internal unit
+int aeSlope = 48, aeLow = -64, aeHigh = 96;
+TUNE(SetRange(0, 128), aeSlope);
+TUNE(SetRange(-256, 0), aeLow);
+TUNE(SetRange(0, 384), aeHigh);
 
 inline int lmr_divisor(int depth) {
     int d = std::min(depth, 16);
@@ -1393,7 +1400,7 @@ moves_loop:  // When in check, search starts here
         r -= ss->statScore * 439 / 4096;
 
         if (!capture && !is_decisive(alpha))
-            r += 3 * std::clamp(alpha - eval, -64, 96);
+            r += aeSlope * std::clamp(int(alpha - eval), aeLow, aeHigh) / 16;
 
         // Scale up reductions for expected ALL nodes
         if (allNode)
