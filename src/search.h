@@ -361,6 +361,8 @@ class Worker {
     template<NodeType nodeType>
     Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta);
 
+    bool rollout_beats_alpha(Position& pos, Stack* ss, Value alpha);
+
     int reduction(bool i, Depth d, int mn) const;
 
     // Pointer to the search manager, only allowed to be called by the main thread
@@ -387,6 +389,10 @@ class Worker {
     RootMoves rootMoves;
     Depth     rootDepth;
     bool      seekMate = false;
+    bool      probing  = false;  // qsearch leaves the TT untouched while set
+    int       probePly = 0;      // ply of the probed child
+    Key       probeKey = 0;      // the probed child and its evaluation, reused by its search
+    Value     probeEval = VALUE_NONE;
 
     PVMoves lastIterationIdxPV;
 

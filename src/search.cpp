@@ -872,7 +872,7 @@ Value Search::Worker::search(
     }
     else
     {
-        unadjustedStaticEval = evaluate(pos);
+        unadjustedStaticEval = posKey == probeKey ? probeEval : evaluate(pos);
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // Static evaluation is saved as it was before adjustment by correction history
@@ -1406,6 +1406,20 @@ moves_loop:  // When in check, search starts here
         // Apply the computed LMR
         if (depth >= 2 && moveCount > 1)
         {
+            // Probe the move with a quiescence search at alpha, without writing to the
+            // TT. If it beats alpha, follow the move picker's first choices for four
+            // plies and probe again. Reduce one ply less if both probes beat alpha, and
+            // another at cut nodes or for moves with a good history.
+            if (depth >= 9 && !givesCheck)
+            {
+                probing  = true;
+                probePly = ss->ply + 1;
+                if (-qsearch<NonPV>(pos, ss + 1, -(alpha + 1), -alpha) > alpha
+                    && rollout_beats_alpha(pos, ss, alpha))
+                    r -= 1024 + 1024 * (cutNode || ss->statScore > 0);
+                probing = false;
+            }
+
             // In general we want to cap the LMR depth search at newDepth, but when
             // reduction is negative, we allow this move a limited search extension
             // beyond the first move depth. To avoid search explosion, extensions
@@ -1416,6 +1430,7 @@ moves_loop:  // When in check, search starts here
             ss->reduction = newDepth - d;
             value         = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, d, true);
             ss->reduction = 0;
+            probeKey      = 0;
 
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Shallower searches here don't scale well
@@ -1690,6 +1705,48 @@ moves_loop:  // When in check, search starts here
 }
 
 
+// Plays the move picker's first legal move for four plies from the child of ss
+// and returns whether a quiescence search at alpha still favours the side to move
+// at ss. Leaves the position and the stack below ss as it found them.
+bool Search::Worker::rollout_beats_alpha(Position& pos, Stack* ss, Value alpha) {
+
+    const Stack saved[5] = {ss[1], ss[2], ss[3], ss[4], ss[5]};
+    StateInfo   st[4];
+    Move        played[4];
+    int         k = 0;
+
+    for (Stack* s = ss + 1; k < 4; ++s)
+    {
+        auto [ttHit, ttData, ttWriter] = tt.probe(pos.key());
+
+        const PieceToHistory* contHist[] = {
+          (s - 1)->continuationHistory, (s - 2)->continuationHistory, (s - 3)->continuationHistory,
+          (s - 4)->continuationHistory, (s - 5)->continuationHistory, (s - 6)->continuationHistory};
+
+        MovePicker mp(pos, ttHit ? ttData.move : Move::none(), 1, &mainHistory, &lowPlyHistory,
+                      &captureHistory, contHist, &sharedHistory, s->ply);
+
+        Move m;
+        while ((m = mp.next_move()) && !pos.legal(m))
+        {}
+
+        if (!m)
+            break;
+
+        do_move(pos, m, st[k], s);
+        played[k++] = m;
+    }
+
+    const bool beats = k == 4 && -qsearch<NonPV>(pos, ss + 5, -(alpha + 1), -alpha) > alpha;
+
+    while (k > 0)
+        undo_move(pos, played[--k]);
+
+    ss[1] = saved[0], ss[2] = saved[1], ss[3] = saved[2], ss[4] = saved[3], ss[5] = saved[4];
+    return beats;
+}
+
+
 // Quiescence search function, which is called by the main search function with
 // depth zero, or recursively with further decreasing depth. With depth <= 0, we
 // "should" be using static eval only, but tactical moves may confuse the static eval.
@@ -1786,6 +1843,9 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             unadjustedStaticEval = evaluate(pos);
             ss->staticEval       = bestValue =
               to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+
+            if (probing && ss->ply == probePly)
+                probeKey = posKey, probeEval = unadjustedStaticEval;
         }
 
         // Stand pat. Return immediately if static value is at least beta
@@ -1794,7 +1854,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             assert(!is_decisive(bestValue));
             bestValue = (441 * bestValue + 583 * beta) / 1024;
 
-            if (!ss->ttHit)
+            if (!ss->ttHit && !probing)
                 ttWriter.write(posKey, VALUE_NONE, false, BOUND_LOWER, DEPTH_UNSEARCHED,
                                Move::none(), unadjustedStaticEval, tt.generation());
             return bestValue;
@@ -1917,9 +1977,10 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
     // Step 10. Save gathered info in transposition table. The static evaluation
     // is saved as it was before adjustment by correction history.
-    ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), pvHit,
-                   bestValue >= beta ? BOUND_LOWER : BOUND_UPPER, DEPTH_QS, bestMove,
-                   unadjustedStaticEval, tt.generation());
+    if (!probing)
+        ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), pvHit,
+                       bestValue >= beta ? BOUND_LOWER : BOUND_UPPER, DEPTH_QS, bestMove,
+                       unadjustedStaticEval, tt.generation());
 
     // The search is now complete
     assert(-VALUE_INFINITE < bestValue && bestValue < VALUE_INFINITE);
