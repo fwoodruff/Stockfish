@@ -387,6 +387,7 @@ class Worker {
     RootMoves rootMoves;
     Depth     rootDepth;
     bool      seekMate = false;
+    int       futilityScale = 1024;
 
     PVMoves lastIterationIdxPV;
 

@@ -348,6 +348,10 @@ bool Search::Worker::iterative_deepening() {
     {
         rootDepth++;
 
+        // Scale futility margins by how long the best move has been stable: prune
+        // less while it is new or still changing, a little more once it has settled
+        futilityScale = 1024 + 24 * (7 - std::min(rootDepth - lastBestMoveDepth, 8));
+
         // Do not tune these values. They are not intended for playing strength.
         int seekMateThreshold = 750 + 220000 / (rootDepth * rootDepth);
 
@@ -1029,6 +1033,7 @@ Value Search::Worker::search(
         Value futilityMargin = futilityMult * depth
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
                              + std::abs(correctionValue) / 198435;
+        futilityMargin = futilityMargin * futilityScale / 1024;
 
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
@@ -1241,8 +1246,8 @@ moves_loop:  // When in check, search starts here
                 // (*Scaler): Generally, lower divisors scale well
                 lmrDepth += history / lmr_divisor(depth);
 
-                Value futilityValue =
-                  ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
+                int   futilityMargin = 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
+                Value futilityValue  = ss->staticEval + futilityMargin * futilityScale / 1024;
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well
