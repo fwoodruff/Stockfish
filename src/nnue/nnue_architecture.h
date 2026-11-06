@@ -96,7 +96,7 @@ struct NetworkArchitecture {
 
     struct Output {
         i32 positional;
-        i32 down, up;  // see nnue_risk_weights.h
+        i32 risk;  // see nnue_risk_weights.h
     };
 
     Output propagate(const TransformedFeatureType* transformedFeatures,
@@ -131,16 +131,12 @@ struct NetworkArchitecture {
 
         fc_2.propagate(buffer.concat_buffer, buffer.fc_2_out);
 
-        // Two more linear outputs on the inputs of fc_2. Some architectures interleave
+        // One more linear output on the inputs of fc_2. Some architectures interleave
         // concat_buffer, so look up each input where fc_2 expects it.
-        static_assert(std::size(DownWeights) == FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2);
-        i32 down = DownBias, up = UpBias;
-        for (IndexType i = 0; i < std::size(DownWeights); ++i)
-        {
-            const i32 x = buffer.concat_buffer[decltype(fc_2)::get_weight_index(i)];
-            down += DownWeights[i] * x;
-            up += UpWeights[i] * x;
-        }
+        static_assert(std::size(RiskWeights) == FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2);
+        i32 risk = RiskBias;
+        for (IndexType i = 0; i < std::size(RiskWeights); ++i)
+            risk += RiskWeights[i] * buffer.concat_buffer[decltype(fc_2)::get_weight_index(i)];
 
         static_assert(FC_0_OUTPUTS >= 2);
         i32 fwdOut = buffer.fc_2_out[0];
@@ -155,7 +151,7 @@ struct NetworkArchitecture {
           static_cast<i64>(HiddenOneVal) * static_cast<i64>(1U << WeightScaleBits) * 2;
 
         i32 outputValue = static_cast<i32>((static_cast<i64>(fwdOut) * multiplier) / denominator);
-        return {outputValue, down >> RiskShift, up >> RiskShift};
+        return {outputValue, risk >> RiskShift};
     }
 
     usize get_content_hash() const {

@@ -52,14 +52,15 @@ Value scale_evaluation(Value nnue, int optimism, const Position& pos);
 // to the draw/win step and beyond the loss/draw step, and negative elsewhere: spread helps a
 // side that is slightly ahead or clearly behind, and hurts one that is slightly behind or
 // clearly ahead. Only the difference between positions matters (a transform shared by all
-// positions does not change minimax), so the spread is the network's own risk estimate
-// (sharpness = down + up, 64 per standard deviation) relative to its average at that eval.
+// positions does not change minimax), so the spread is the network's own estimate of its error
+// size (a linear head on fc_2's inputs, see nnue_risk_weights.h) relative to its average at
+// that eval.
 int jensenScale = 0;
-TUNE(SetRange(-64, 64), jensenScale);
+TUNE(SetRange(-32, 32), jensenScale);
 
 namespace {
 
-constexpr int JensenMinMaterial = 17, JensenMaxMaterial = 78, JensenStep = 8, JensenRange = 2048;
+constexpr int JensenMinMaterial = 17, JensenMaxMaterial = 78, JensenStep = 8, JensenRange = 1024;
 
 // J(v) * 2^20 for each WDL material count and eval (steps of 8 internal units)
 struct JensenTable {
@@ -92,32 +93,38 @@ struct JensenTable {
 
 const JensenTable jensenTable;
 
-// 2^(x / 64) * 1024 for x in [-128, 128], and its mean over in-search evaluations (bench)
+// Error variance factor exp(1.70 * x / 64) * 1024 for x in [-96, 96]: the risk head's unit
+// (64) is 0.85 in log error size, so 1.70 in log variance. SpreadMean is its average over
+// in-search evaluations (bench), so that the correction averages zero.
 struct SpreadTable {
-    i32 f[257];
+    i32 f[193];
     SpreadTable() {
-        for (int x = -128; x <= 128; ++x)
-            f[x + 128] = i32(std::lround(std::exp2(x / 64.0) * 1024));
+        for (int x = -96; x <= 96; ++x)
+            f[x + 96] = i32(std::lround(std::exp(1.70 * x / 64) * 1024));
     }
 };
-constexpr int SpreadMean = 1436;
+constexpr int SpreadMean = 3451;
 
 const SpreadTable spreadTable;
 
 }  // namespace
 
-Value Eval::jensen_correction(Value v, Value nnue, int sharpness, const Position& pos) {
+Value Eval::jensen_correction(Value v, Value nnue, int risk, const Position& pos) {
+
+    // Only around the WDL steps: in clearly decided positions the expected score hardly moves
+    if (std::abs(v) >= JensenRange)
+        return VALUE_ZERO;
 
     const int material = pos.count<PAWN>() + 3 * pos.count<KNIGHT>() + 3 * pos.count<BISHOP>()
                        + 5 * pos.count<ROOK>() + 9 * pos.count<QUEEN>();
     const int mat = std::clamp(material, JensenMinMaterial, JensenMaxMaterial) - JensenMinMaterial;
-    const int i   = std::clamp(v + JensenRange, 0, 2 * JensenRange - 1) / JensenStep;
+    const int i   = (v + JensenRange) / JensenStep;
 
     // Spread relative to its average at this eval, centred so that the correction averages zero
-    const int expected = 2 + 17 * std::min(std::abs(nnue), 1500) / 256;
-    const int rel      = spreadTable.f[std::clamp(sharpness - expected, -128, 128) + 128] - SpreadMean;
+    const int expected = 8 + 26 * std::min(std::abs(nnue), 1500) / 256;
+    const int rel      = spreadTable.f[std::clamp(risk - expected, -96, 96) + 96] - SpreadMean;
 
-    // jensenScale 64: an average spread of 100 internal units, s^2 / 2 = 5000
+    // jensenScale 64: s^2 / 2 = 5000 at the average spread (an error of 100 internal units)
     const i64 corr = i64(jensenScale) * 5000 / 64 * rel / 1024 * jensenTable.j[mat][i] / (1 << 20);
     return Value(std::clamp<i64>(corr, -128, 128));
 }
@@ -129,11 +136,11 @@ Value Eval::evaluate(const Eval::NNUE::Network&     network,
                      int                            optimism) {
 
     assert(!pos.checkers());
-    const auto [nnue, down, up] = network.evaluate(pos, accumulators, caches);
+    const auto [nnue, risk] = network.evaluate(pos, accumulators, caches);
     Value v = scale_evaluation(nnue, optimism, pos);
 
     if (jensenScale)
-        v = std::clamp(v + jensen_correction(v, nnue, down + up, pos), VALUE_TB_LOSS_IN_MAX_PLY + 1,
+        v = std::clamp(v + jensen_correction(v, nnue, risk, pos), VALUE_TB_LOSS_IN_MAX_PLY + 1,
                        VALUE_TB_WIN_IN_MAX_PLY - 1);
 
     return v;

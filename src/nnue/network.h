@@ -64,7 +64,7 @@ class Network {
 
     struct Output {
         Value value;
-        int   down, up;
+        int   risk;
     };
 
     Output evaluate(const Position&    pos,
