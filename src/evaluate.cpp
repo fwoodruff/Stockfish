@@ -32,6 +32,7 @@
 #include "nnue/nnue_misc.h"
 #include "position.h"
 #include "types.h"
+#include "tune.h"
 #include "uci.h"
 #include "nnue/nnue_accumulator.h"
 
@@ -45,6 +46,82 @@ static int simple_eval(const Position& pos) {
 
 Value scale_evaluation(Value nnue, int optimism, const Position& pos);
 
+// Expected score under uncertainty. With E(v) the expected score of eval v under the WDL model,
+// an eval with error spread s is worth about E(v) + s^2 E''(v) / 2, i.e. eval v + s^2 J(v) / 2
+// with J = E'' / E'. Since E has two steps (loss to draw, draw to win), J is positive from 0 up
+// to the draw/win step and beyond the loss/draw step, and negative elsewhere: spread helps a
+// side that is slightly ahead or clearly behind, and hurts one that is slightly behind or
+// clearly ahead. Only the difference between positions matters (a transform shared by all
+// positions does not change minimax), so the spread is the network's own risk estimate
+// (sharpness = down + up, 64 per standard deviation) relative to its average at that eval.
+int jensenScale = 0;
+TUNE(SetRange(-64, 64), jensenScale);
+
+namespace {
+
+constexpr int JensenMinMaterial = 17, JensenMaxMaterial = 78, JensenStep = 8, JensenRange = 2048;
+
+// J(v) * 2^20 for each WDL material count and eval (steps of 8 internal units)
+struct JensenTable {
+    i32 j[JensenMaxMaterial - JensenMinMaterial + 1][2 * JensenRange / JensenStep];
+
+    JensenTable() {
+        constexpr double as[] = {-142.72052667, 372.35176398, -340.71073572, 415.23490212};
+        constexpr double bs[] = {5.93832785, 15.61267078, -30.57816876, 69.63866711};
+
+        for (int mat = JensenMinMaterial; mat <= JensenMaxMaterial; ++mat)
+        {
+            const double m = mat / 58.0;
+            const double a = ((as[0] * m + as[1]) * m + as[2]) * m + as[3];
+            const double b = ((bs[0] * m + bs[1]) * m + bs[2]) * m + bs[3];
+
+            auto w  = [&](double x) { return 1 / (1 + std::exp((a - x) / b)); };
+            auto w1 = [&](double x) { return w(x) * (1 - w(x)) / b; };
+            auto w2 = [&](double x) { return w1(x) * (1 - 2 * w(x)) / b; };
+
+            for (int i = 0; i < 2 * JensenRange / JensenStep; ++i)
+            {
+                const double v  = i * JensenStep - JensenRange;
+                const double e1 = (w1(v) + w1(-v)) / 2;
+                const double e2 = (w2(v) - w2(-v)) / 2;
+                j[mat - JensenMinMaterial][i] = i32(std::lround(e2 / e1 * (1 << 20)));
+            }
+        }
+    }
+};
+
+const JensenTable jensenTable;
+
+// 2^(x / 64) * 1024 for x in [-128, 128], and its mean over in-search evaluations (bench)
+struct SpreadTable {
+    i32 f[257];
+    SpreadTable() {
+        for (int x = -128; x <= 128; ++x)
+            f[x + 128] = i32(std::lround(std::exp2(x / 64.0) * 1024));
+    }
+};
+constexpr int SpreadMean = 1436;
+
+const SpreadTable spreadTable;
+
+}  // namespace
+
+Value Eval::jensen_correction(Value v, Value nnue, int sharpness, const Position& pos) {
+
+    const int material = pos.count<PAWN>() + 3 * pos.count<KNIGHT>() + 3 * pos.count<BISHOP>()
+                       + 5 * pos.count<ROOK>() + 9 * pos.count<QUEEN>();
+    const int mat = std::clamp(material, JensenMinMaterial, JensenMaxMaterial) - JensenMinMaterial;
+    const int i   = std::clamp(v + JensenRange, 0, 2 * JensenRange - 1) / JensenStep;
+
+    // Spread relative to its average at this eval, centred so that the correction averages zero
+    const int expected = 2 + 17 * std::min(std::abs(nnue), 1500) / 256;
+    const int rel      = spreadTable.f[std::clamp(sharpness - expected, -128, 128) + 128] - SpreadMean;
+
+    // jensenScale 64: an average spread of 100 internal units, s^2 / 2 = 5000
+    const i64 corr = i64(jensenScale) * 5000 / 64 * rel / 1024 * jensenTable.j[mat][i] / (1 << 20);
+    return Value(std::clamp<i64>(corr, -128, 128));
+}
+
 Value Eval::evaluate(const Eval::NNUE::Network&     network,
                      const Position&                pos,
                      Eval::NNUE::AccumulatorStack&  accumulators,
@@ -52,8 +129,14 @@ Value Eval::evaluate(const Eval::NNUE::Network&     network,
                      int                            optimism) {
 
     assert(!pos.checkers());
-    Value nnue = network.evaluate(pos, accumulators, caches);
-    return scale_evaluation(nnue, optimism, pos);
+    const auto [nnue, down, up] = network.evaluate(pos, accumulators, caches);
+    Value v = scale_evaluation(nnue, optimism, pos);
+
+    if (jensenScale)
+        v = std::clamp(v + jensen_correction(v, nnue, down + up, pos), VALUE_TB_LOSS_IN_MAX_PLY + 1,
+                       VALUE_TB_WIN_IN_MAX_PLY - 1);
+
+    return v;
 }
 
 // Applies search-dependent scaling (optimism and rule50) to the raw NNUE eval
@@ -102,7 +185,7 @@ std::string Eval::trace(Position& pos, const Eval::NNUE::Network& network) {
 
     ss << std::showpoint << std::showpos << std::fixed << std::setprecision(2) << std::setw(15);
 
-    Value nnue = network.evaluate(pos, *accumulators, *caches);
+    Value nnue = network.evaluate(pos, *accumulators, *caches).value;
     Value s_v  = scale_evaluation(nnue, VALUE_ZERO, pos);  // requires stm perspective
 
     ss << "NNUE evaluation          " << nnue << " (side to move, internal units)\n";

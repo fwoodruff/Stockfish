@@ -43,6 +43,9 @@ class AccumulatorStack;
 
 std::string trace(Position& pos, const Eval::NNUE::Network& network);
 
+// Expected-score correction for the spread of the eval error, see evaluate.cpp
+Value jensen_correction(Value v, Value nnue, int sharpness, const Position& pos);
+
 Value evaluate(const NNUE::Network&           network,
                const Position&                pos,
                Eval::NNUE::AccumulatorStack&  accumulators,
