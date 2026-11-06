@@ -1396,6 +1396,20 @@ moves_loop:  // When in check, search starts here
         // Apply the computed LMR
         if (depth >= 2 && moveCount > 1)
         {
+            // Probe the move with a quiescence search at alpha, without writing to the
+            // TT: reduce less if it already beats alpha, more if it falls far short
+            if (depth >= 6)
+            {
+                probing           = true;
+                const Value probe = -qsearch<NonPV>(pos, ss + 1, -(alpha + 1), -alpha);
+                probing           = false;
+
+                if (probe > alpha)
+                    r -= 1024;
+                else if (probe <= alpha - 200)
+                    r += 512;
+            }
+
             // In general we want to cap the LMR depth search at newDepth, but when
             // reduction is negative, we allow this move a limited search extension
             // beyond the first move depth. To avoid search explosion, extensions
@@ -1784,7 +1798,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             assert(!is_decisive(bestValue));
             bestValue = (441 * bestValue + 583 * beta) / 1024;
 
-            if (!ss->ttHit)
+            if (!ss->ttHit && !probing)
                 ttWriter.write(posKey, VALUE_NONE, false, BOUND_LOWER, DEPTH_UNSEARCHED,
                                Move::none(), unadjustedStaticEval, tt.generation());
             return bestValue;
@@ -1907,9 +1921,10 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
     // Step 10. Save gathered info in transposition table. The static evaluation
     // is saved as it was before adjustment by correction history.
-    ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), pvHit,
-                   bestValue >= beta ? BOUND_LOWER : BOUND_UPPER, DEPTH_QS, bestMove,
-                   unadjustedStaticEval, tt.generation());
+    if (!probing)
+        ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), pvHit,
+                       bestValue >= beta ? BOUND_LOWER : BOUND_UPPER, DEPTH_QS, bestMove,
+                       unadjustedStaticEval, tt.generation());
 
     // The search is now complete
     assert(-VALUE_INFINITE < bestValue && bestValue < VALUE_INFINITE);

@@ -387,6 +387,7 @@ class Worker {
     RootMoves rootMoves;
     Depth     rootDepth;
     bool      seekMate = false;
+    bool      probing  = false;  // qsearch leaves the TT untouched while set
 
     PVMoves lastIterationIdxPV;
 
