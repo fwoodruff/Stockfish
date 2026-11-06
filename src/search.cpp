@@ -54,11 +54,11 @@
 namespace Stockfish {
 
 // SPSA: LMR alpha - eval term, slope in 1/16 ply per internal unit
-int aeSlope = 48, aeLow = -64, aeHigh = 96, aeBase = 697;
+int aeSlope = 48, aeLow = -64, aeHigh = 96, aeConst = 0;
 TUNE(SetRange(0, 128), aeSlope);
 TUNE(SetRange(-256, 0), aeLow);
 TUNE(SetRange(0, 384), aeHigh);
-TUNE(SetRange(0, 1400), aeBase);
+TUNE(SetRange(-1024, 1024), aeConst);
 
 inline int lmr_divisor(int depth) {
     int d = std::min(depth, 16);
@@ -1367,7 +1367,7 @@ moves_loop:  // When in check, search starts here
                + (ttData.depth >= depth) * (816 + cutNode * 940);
 
         // Base reduction offset to compensate for other tweaks
-        r += aeBase;
+        r += 697;
 
         r -= moveCount * 65;
         r -= std::abs(correctionValue) / 26310;
@@ -1401,7 +1401,7 @@ moves_loop:  // When in check, search starts here
         r -= ss->statScore * 439 / 4096;
 
         if (!capture && !is_decisive(alpha))
-            r += aeSlope * std::clamp(int(alpha - eval), aeLow, aeHigh) / 16;
+            r += aeSlope * std::clamp(int(alpha - eval), aeLow, aeHigh) / 16 + aeConst;
 
         // Scale up reductions for expected ALL nodes
         if (allNode)
