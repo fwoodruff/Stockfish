@@ -46,11 +46,15 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
 
 namespace Stockfish {
+
+int spThreat = 0;
+TUNE(SetRange(-64, 128), spThreat);
 
 inline int lmr_divisor(int depth) {
     int d = std::min(depth, 16);
@@ -1786,6 +1790,17 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             unadjustedStaticEval = evaluate(pos);
             ss->staticEval       = bestValue =
               to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+        }
+
+        // Skeptical stand pat: with a piece attacked by a lesser piece, standing pat is not really on offer
+        if (bestValue == ss->staticEval)
+        {
+            const Color    us     = pos.side_to_move();
+            const Bitboard minors = pos.threats_by(PAWN) | pos.threats_by(KNIGHT) | pos.threats_by(BISHOP);
+            if ((pos.pieces(us, KNIGHT, BISHOP) & pos.threats_by(PAWN)) | (pos.pieces(us, ROOK) & minors)
+                | (pos.pieces(us, QUEEN) & (minors | pos.threats_by(ROOK))))
+                bestValue = std::clamp(bestValue - spThreat, VALUE_TB_LOSS_IN_MAX_PLY + 1,
+                                       VALUE_TB_WIN_IN_MAX_PLY - 1);
         }
 
         // Stand pat. Return immediately if static value is at least beta
