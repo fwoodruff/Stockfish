@@ -1281,15 +1281,18 @@ moves_loop:  // When in check, search starts here
                     Value futilityValue =
                       ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
 
-                    // Futility pruning: parent node, sparing tactical quiet moves near the margin
+                    // Futility pruning: parent node
                     // (*Scaler): Generally, more frequent futility pruning scales well
-                    if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha
-                        && !(futilityValue + 150 > alpha && tactical_quiet(pos, move)))
+                    if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha)
                     {
-                        if (bestValue <= futilityValue && !is_decisive(bestValue)
-                            && !is_win(futilityValue))
-                            bestValue = futilityValue;
-                        continue;
+                        // Spare tactical quiet moves near the margin
+                        if (futilityValue + 150 <= alpha || !tactical_quiet(pos, move))
+                        {
+                            if (bestValue <= futilityValue && !is_decisive(bestValue)
+                                && !is_win(futilityValue))
+                                bestValue = futilityValue;
+                            continue;
+                        }
                     }
 
                     lmrDepth = std::max(lmrDepth, 0);
