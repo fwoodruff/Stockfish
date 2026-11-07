@@ -46,15 +46,14 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
-#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
 
 namespace Stockfish {
 
-int esSlope = 0;
-TUNE(SetRange(-128, 128), esSlope);
+// Slope of the margin scaling in the error size (64: margins double per doubling of the error)
+constexpr int esSlope = -32;
 
 inline int lmr_divisor(int depth) {
     int d = std::min(depth, 16);
