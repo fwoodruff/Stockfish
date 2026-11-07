@@ -89,8 +89,8 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // so changing them or adding conditions that are similar requires
 // tests at these types of time controls.
 
-// A quiet move is tactical if it moves a piece attacked by a lesser piece, or if from
-// its destination it newly attacks a more valuable enemy piece
+// A quiet move is tactical if it lands on a square no lesser enemy piece attacks, and
+// either moves a piece attacked by a lesser piece or newly attacks a more valuable one
 bool tactical_quiet(const Position& pos, Move m) {
 
     if (m.type_of() != NORMAL)
@@ -101,7 +101,6 @@ bool tactical_quiet(const Position& pos, Move m) {
     const Piece     pc   = pos.piece_on(from);
     const PieceType pt   = type_of(pc);
 
-    // Escape: the piece is attacked by a lesser one
     if (pt != PAWN && pt != KING)
     {
         Bitboard byLesser = pos.threats_by(PAWN);
@@ -109,6 +108,12 @@ bool tactical_quiet(const Position& pos, Move m) {
             byLesser |= pos.threats_by(KNIGHT) | pos.threats_by(BISHOP);
         if (pt == QUEEN)
             byLesser |= pos.threats_by(ROOK);
+
+        // Landing where a lesser piece attacks is not tactical
+        if (byLesser & to)
+            return false;
+
+        // Escape: the piece is attacked by a lesser one
         if (byLesser & from)
             return true;
     }
@@ -1303,11 +1308,12 @@ moves_loop:  // When in check, search starts here
                     // (*Scaler): Generally, more frequent futility pruning scales well
                     if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha + 150)
                     {
-                        // Spare tactical quiet moves near the margin. When one of our pieces
-                        // is attacked by a lesser one, prune other quiet moves above it too.
-                        if (futilityValue <= alpha
-                              ? futilityValue + 150 <= alpha || !tactical_quiet(pos, move)
-                              : under_threat(pos) && !tactical_quiet(pos, move))
+                        // Spare tactical quiet moves near the margin. Prune other quiet moves
+                        // slightly above it, and further above when one of our pieces is
+                        // attacked by a lesser one.
+                        if (futilityValue + 150 <= alpha
+                            || ((futilityValue <= alpha + 20 || under_threat(pos))
+                                && !tactical_quiet(pos, move)))
                         {
                             if (bestValue <= futilityValue && !is_decisive(bestValue)
                                 && !is_win(futilityValue))
