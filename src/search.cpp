@@ -100,23 +100,30 @@ bool tactical_quiet(const Position& pos, Move m) {
     const Square    from = m.from_sq(), to = m.to_sq();
     const Piece     pc   = pos.piece_on(from);
     const PieceType pt   = type_of(pc);
-    const Bitboard  minorThreats =
-      pos.threats_by(PAWN) | pos.threats_by(KNIGHT) | pos.threats_by(BISHOP);
 
-    const Bitboard byLesser = pt == KNIGHT || pt == BISHOP ? pos.threats_by(PAWN)
-                            : pt == ROOK                   ? minorThreats
-                            : pt == QUEEN                  ? minorThreats | pos.threats_by(ROOK)
-                                                           : Bitboard(0);
-    if (byLesser & from)
-        return true;
+    // Escape: the piece is attacked by a lesser one
+    if (pt != PAWN && pt != KING)
+    {
+        Bitboard byLesser = pos.threats_by(PAWN);
+        if (pt >= ROOK)
+            byLesser |= pos.threats_by(KNIGHT) | pos.threats_by(BISHOP);
+        if (pt == QUEEN)
+            byLesser |= pos.threats_by(ROOK);
+        if (byLesser & from)
+            return true;
+    }
 
     const Bitboard targets = pt == PAWN    ? pos.pieces(~us) & ~pos.pieces(PAWN, KING)
                            : pt <= BISHOP  ? pos.pieces(~us, ROOK, QUEEN)
                            : pt == ROOK    ? pos.pieces(~us, QUEEN)
                                            : Bitboard(0);
 
-    return targets & Attacks::attacks_bb(pc, to, (pos.pieces() ^ from) | to)
-         & ~Attacks::attacks_bb(pc, from, pos.pieces());
+    if (!targets)
+        return false;
+
+    const Bitboard attacked = targets & Attacks::attacks_bb(pc, to, (pos.pieces() ^ from) | to);
+
+    return attacked && (attacked & ~Attacks::attacks_bb(pc, from, pos.pieces()));
 }
 
 // (*Scaler) All tuned parameters at time controls shorter than
