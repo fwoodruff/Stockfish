@@ -89,6 +89,36 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // so changing them or adding conditions that are similar requires
 // tests at these types of time controls.
 
+// A quiet move is tactical if it moves a piece attacked by a lesser piece, or if from
+// its destination it newly attacks a more valuable enemy piece
+bool tactical_quiet(const Position& pos, Move m) {
+
+    if (m.type_of() != NORMAL)
+        return false;
+
+    const Color     us   = pos.side_to_move();
+    const Square    from = m.from_sq(), to = m.to_sq();
+    const Piece     pc   = pos.piece_on(from);
+    const PieceType pt   = type_of(pc);
+    const Bitboard  minorThreats =
+      pos.threats_by(PAWN) | pos.threats_by(KNIGHT) | pos.threats_by(BISHOP);
+
+    const Bitboard byLesser = pt == KNIGHT || pt == BISHOP ? pos.threats_by(PAWN)
+                            : pt == ROOK                   ? minorThreats
+                            : pt == QUEEN                  ? minorThreats | pos.threats_by(ROOK)
+                                                           : Bitboard(0);
+    if (byLesser & from)
+        return true;
+
+    const Bitboard targets = pt == PAWN    ? pos.pieces(~us) & ~pos.pieces(PAWN, KING)
+                           : pt <= BISHOP  ? pos.pieces(~us, ROOK, QUEEN)
+                           : pt == ROOK    ? pos.pieces(~us, QUEEN)
+                                           : Bitboard(0);
+
+    return targets & Attacks::attacks_bb(pc, to, (pos.pieces() ^ from) | to)
+         & ~Attacks::attacks_bb(pc, from, pos.pieces());
+}
+
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
@@ -1251,9 +1281,10 @@ moves_loop:  // When in check, search starts here
                     Value futilityValue =
                       ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
 
-                    // Futility pruning: parent node
+                    // Futility pruning: parent node, sparing tactical quiet moves near the margin
                     // (*Scaler): Generally, more frequent futility pruning scales well
-                    if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha)
+                    if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha
+                        && !(futilityValue + 150 > alpha && tactical_quiet(pos, move)))
                     {
                         if (bestValue <= futilityValue && !is_decisive(bestValue)
                             && !is_win(futilityValue))
