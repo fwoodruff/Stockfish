@@ -126,6 +126,17 @@ bool tactical_quiet(const Position& pos, Move m) {
     return attacked && (attacked & ~Attacks::attacks_bb(pc, from, pos.pieces()));
 }
 
+// True if one of our pieces is attacked by a lesser enemy piece
+bool under_threat(const Position& pos) {
+
+    const Color    us           = pos.side_to_move();
+    const Bitboard minorThreats = pos.threats_by(PAWN) | pos.threats_by(KNIGHT) | pos.threats_by(BISHOP);
+
+    return (pos.pieces(us, KNIGHT, BISHOP) & pos.threats_by(PAWN))
+         | (pos.pieces(us, ROOK) & minorThreats)
+         | (pos.pieces(us, QUEEN) & (minorThreats | pos.threats_by(ROOK)));
+}
+
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
@@ -1290,14 +1301,17 @@ moves_loop:  // When in check, search starts here
 
                     // Futility pruning: parent node
                     // (*Scaler): Generally, more frequent futility pruning scales well
-                    if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha)
+                    if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha + 150)
                     {
-                        // Spare tactical quiet moves near the margin
-                        if (futilityValue + 150 <= alpha || !tactical_quiet(pos, move))
+                        // Spare tactical quiet moves near the margin. When one of our pieces
+                        // is attacked by a lesser one, prune other quiet moves above it too.
+                        if (futilityValue <= alpha
+                              ? futilityValue + 150 <= alpha || !tactical_quiet(pos, move)
+                              : under_threat(pos) && !tactical_quiet(pos, move))
                         {
                             if (bestValue <= futilityValue && !is_decisive(bestValue)
                                 && !is_win(futilityValue))
-                                bestValue = futilityValue;
+                                bestValue = std::min(futilityValue, alpha);
                             continue;
                         }
                     }
