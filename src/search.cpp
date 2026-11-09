@@ -1309,10 +1309,9 @@ moves_loop:  // When in check, search starts here
                     if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha + 150)
                     {
                         // Spare tactical quiet moves near the margin. Prune other quiet moves
-                        // slightly above it, and further above when one of our pieces is
-                        // attacked by a lesser one.
-                        if (futilityValue + 150 <= alpha
-                            || ((futilityValue <= alpha + 20 || under_threat(pos))
+                        // above it when one of our pieces is attacked by a lesser one.
+                        if (futilityValue + 250 <= alpha
+                            || ((futilityValue <= alpha || under_threat(pos))
                                 && !tactical_quiet(pos, move)))
                         {
                             if (bestValue <= futilityValue && !is_decisive(bestValue)
