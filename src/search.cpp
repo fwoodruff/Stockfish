@@ -53,10 +53,10 @@
 
 namespace Stockfish {
 
-int fcSpare = 150, fcWet = 20, fcThreat = 150, fpDepth = 12, fp119 = 119, fp90 = 90, fp164 = 164;
+int fcSpare = 150, fcWet = 20, fcThreat = 150, fcSpareDepth = 12, fp119 = 119, fp90 = 90, fp164 = 164;
 TUNE(SetRange(0, 400), fcSpare, fcThreat);
 TUNE(SetRange(-60, 100), fcWet);
-TUNE(SetRange(6, 18), fpDepth);
+TUNE(SetRange(-2, 12), fcSpareDepth);
 TUNE(SetRange(100, 140), fp119);
 TUNE(SetRange(70, 110), fp90);
 TUNE(SetRange(140, 190), fp164);
@@ -1315,13 +1315,14 @@ moves_loop:  // When in check, search starts here
 
                     // Futility pruning: parent node
                     // (*Scaler): Generally, more frequent futility pruning scales well
-                    if (!ss->inCheck && lmrDepth < fpDepth
+                    if (!ss->inCheck && lmrDepth < 12
                         && futilityValue <= alpha + std::max(fcWet, fcThreat))
                     {
                         // Spare tactical quiet moves near the margin. Prune other quiet moves
                         // slightly above it, and further above when one of our pieces is
                         // attacked by a lesser one.
                         if (futilityValue + fcSpare <= alpha
+                            || (lmrDepth > fcSpareDepth && futilityValue <= alpha)
                             || ((futilityValue <= alpha + fcWet
                                  || (futilityValue <= alpha + fcThreat && under_threat(pos)))
                                 && !tactical_quiet(pos, move)))
