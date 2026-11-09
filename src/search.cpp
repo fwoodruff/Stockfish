@@ -46,11 +46,20 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
 
 namespace Stockfish {
+
+int fcSpare = 150, fcWet = 20, fcThreat = 150, fpDepth = 12, fp119 = 119, fp90 = 90, fp164 = 164;
+TUNE(SetRange(0, 400), fcSpare, fcThreat);
+TUNE(SetRange(-60, 100), fcWet);
+TUNE(SetRange(6, 18), fpDepth);
+TUNE(SetRange(100, 140), fp119);
+TUNE(SetRange(70, 110), fp90);
+TUNE(SetRange(140, 190), fp164);
 
 inline int lmr_divisor(int depth) {
     int d = std::min(depth, 16);
@@ -1302,17 +1311,19 @@ moves_loop:  // When in check, search starts here
                     lmrDepth += history / lmr_divisor(depth);
 
                     Value futilityValue =
-                      ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
+                      ss->staticEval + fp119 * lmrDepth + fp90 * (ss->staticEval > alpha) + fp164;
 
                     // Futility pruning: parent node
                     // (*Scaler): Generally, more frequent futility pruning scales well
-                    if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha + 150)
+                    if (!ss->inCheck && lmrDepth < fpDepth
+                        && futilityValue <= alpha + std::max(fcWet, fcThreat))
                     {
                         // Spare tactical quiet moves near the margin. Prune other quiet moves
                         // slightly above it, and further above when one of our pieces is
                         // attacked by a lesser one.
-                        if (futilityValue + 150 <= alpha
-                            || ((futilityValue <= alpha + 20 || under_threat(pos))
+                        if (futilityValue + fcSpare <= alpha
+                            || ((futilityValue <= alpha + fcWet
+                                 || (futilityValue <= alpha + fcThreat && under_threat(pos)))
                                 && !tactical_quiet(pos, move)))
                         {
                             if (bestValue <= futilityValue && !is_decisive(bestValue)
