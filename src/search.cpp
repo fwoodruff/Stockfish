@@ -1308,9 +1308,10 @@ moves_loop:  // When in check, search starts here
                     // (*Scaler): Generally, more frequent futility pruning scales well
                     if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha + 150)
                     {
-                        // Spare tactical quiet moves near the margin. Prune other quiet moves
-                        // above it when one of our pieces is attacked by a lesser one.
-                        if (futilityValue + 250 <= alpha
+                        // At shallow depth, spare tactical quiet moves near the margin. Prune
+                        // other quiet moves above it when one of our pieces is attacked by a
+                        // lesser one.
+                        if (futilityValue + 300 <= alpha || (lmrDepth > 0 && futilityValue <= alpha)
                             || ((futilityValue <= alpha || under_threat(pos))
                                 && !tactical_quiet(pos, move)))
                         {
