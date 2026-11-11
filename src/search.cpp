@@ -46,11 +46,24 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
 
 namespace Stockfish {
+
+int fcSpare = 302, fcSpareDepth = 0, fcRampSlope = 150, fcClampLo = 0, fcClampHi = 300,
+    fcThreat = 137, fp119 = 119, fp90 = 92, fp164 = 158;
+TUNE(SetRange(0, 700), fcSpare);
+TUNE(SetRange(-2, 6), fcSpareDepth);
+TUNE(SetRange(0, 300), fcRampSlope);
+TUNE(SetRange(-60, 100), fcClampLo);
+TUNE(SetRange(150, 600), fcClampHi);
+TUNE(SetRange(0, 400), fcThreat);
+TUNE(SetRange(95, 140), fp119);
+TUNE(SetRange(60, 130), fp90);
+TUNE(SetRange(140, 190), fp164);
 
 inline int lmr_divisor(int depth) {
     int d = std::min(depth, 16);
@@ -149,16 +162,16 @@ bool under_threat(const Position& pos) {
 // or when one of our pieces is attacked by a lesser one.
 bool futility_prune(const Position& pos, Move move, int lmrDepth, int margin) {
 
-    if (margin <= -302)
+    if (margin <= -fcSpare)
         return true;
 
     // How far above alpha a non-tactical quiet move would be pruned
-    const int limit = std::clamp(150 * lmrDepth, 0, 300);
+    const int limit = std::clamp(fcRampSlope * lmrDepth, fcClampLo, fcClampHi);
 
-    if (margin > limit && (margin > 137 || !under_threat(pos)))
+    if (margin > limit && (margin > fcThreat || !under_threat(pos)))
         return false;
 
-    return (lmrDepth > 0 && margin <= 0) || !tactical_quiet(pos, move);
+    return (lmrDepth > fcSpareDepth && margin <= 0) || !tactical_quiet(pos, move);
 }
 
 // (*Scaler) All tuned parameters at time controls shorter than
@@ -1314,7 +1327,7 @@ moves_loop:  // When in check, search starts here
                 lmrDepth += history / lmr_divisor(depth);
 
                 Value futilityValue =
-                  ss->staticEval + 119 * lmrDepth + 92 * (ss->staticEval > alpha) + 158;
+                  ss->staticEval + fp119 * lmrDepth + fp90 * (ss->staticEval > alpha) + fp164;
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well
