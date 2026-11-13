@@ -89,6 +89,72 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // so changing them or adding conditions that are similar requires
 // tests at these types of time controls.
 
+// A quiet move is tactical if it lands on a square no lesser enemy piece attacks, and
+// either moves a piece attacked by a lesser piece or newly attacks a more valuable one
+bool tactical_quiet(const Position& pos, Move m) {
+
+    if (m.type_of() != NORMAL)
+        return false;
+
+    const Color     us   = pos.side_to_move();
+    const Square    from = m.from_sq(), to = m.to_sq();
+    const Piece     pc = pos.piece_on(from);
+    const PieceType pt = type_of(pc);
+
+    if (pt != PAWN && pt != KING)
+    {
+        Bitboard byLesser = pos.threats_by(PAWN);
+        if (pt >= ROOK)
+            byLesser |= pos.threats_by(KNIGHT) | pos.threats_by(BISHOP);
+        if (pt == QUEEN)
+            byLesser |= pos.threats_by(ROOK);
+
+        // Landing where a lesser piece attacks is not tactical
+        if (byLesser & to)
+            return false;
+
+        // Escape: the piece is attacked by a lesser one
+        if (byLesser & from)
+            return true;
+    }
+
+    const Bitboard targets = pt == PAWN   ? pos.pieces(~us) & ~pos.pieces(PAWN, KING)
+                           : pt <= BISHOP ? pos.pieces(~us, ROOK, QUEEN)
+                           : pt == ROOK   ? pos.pieces(~us, QUEEN)
+                                          : Bitboard(0);
+
+    if (!targets)
+        return false;
+
+    const Bitboard attacked = targets & Attacks::attacks_bb(pc, to, (pos.pieces() ^ from) | to);
+
+    return attacked & ~Attacks::attacks_bb(pc, from, pos.pieces());
+}
+
+// True if one of our pieces is attacked by a lesser enemy piece
+bool under_threat(const Position& pos) {
+
+    const Color    us = pos.side_to_move();
+    const Bitboard minorThreats =
+      pos.threats_by(PAWN) | pos.threats_by(KNIGHT) | pos.threats_by(BISHOP);
+
+    return (pos.pieces(us, KNIGHT, BISHOP) & pos.threats_by(PAWN))
+         | (pos.pieces(us, ROOK) & minorThreats)
+         | (pos.pieces(us, QUEEN) & (minorThreats | pos.threats_by(ROOK)));
+}
+
+// Adjustment to the futility value of a quiet move near the futility margin. Tactical
+// quiet moves are spared below it, at greater depth only with good history. Other quiet
+// moves are pruned slightly above it, and further above when one of our pieces is
+// attacked by a lesser one or the move's history is bad.
+int futility_adjustment(const Position& pos, Move move, int lmrDepth, int history) {
+
+    if (tactical_quiet(pos, move))
+        return lmrDepth <= 0 || history > 0 ? 150 : 0;
+
+    return under_threat(pos) || history < -16000 ? -150 : -20;
+}
+
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
@@ -1246,12 +1312,19 @@ moves_loop:  // When in check, search starts here
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well
-                if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha)
+                if (!ss->inCheck && lmrDepth < 12)
                 {
-                    if (bestValue <= futilityValue && !is_decisive(bestValue)
-                        && !is_win(futilityValue))
-                        bestValue = futilityValue;
-                    continue;
+                    // Only where it can change the decision
+                    if (futilityValue > alpha - 150 && futilityValue <= alpha + 150)
+                        futilityValue += futility_adjustment(pos, move, lmrDepth, history);
+
+                    if (futilityValue <= alpha)
+                    {
+                        if (bestValue <= futilityValue && !is_decisive(bestValue)
+                            && !is_win(futilityValue))
+                            bestValue = futilityValue;
+                        continue;
+                    }
                 }
 
                 lmrDepth = std::max(lmrDepth, 0);
