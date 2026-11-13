@@ -713,6 +713,7 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
     mainHistory.fill(-5);
+    futilityHistory.fill(256);
     captureHistory.fill(-742);
 
     // Each thread clears its part of the dynamically-sized shared histories.
@@ -1157,6 +1158,8 @@ moves_loop:  // When in check, search starts here
     {
         assert(move.is_ok());
 
+        Value nearMargin = VALUE_NONE;  // futility value above alpha of a quiet move
+
         if (move == excludedMove)
             continue;
 
@@ -1243,6 +1246,16 @@ moves_loop:  // When in check, search starts here
 
                 Value futilityValue =
                   ss->staticEval + 119 * lmrDepth + 90 * (ss->staticEval > alpha) + 164;
+
+                if (!ss->inCheck)
+                    nearMargin = futilityValue - alpha;
+
+                // Prune further above alpha when both the move's history and the futility
+                // history say such moves rarely beat alpha. Such moves keep being searched,
+                // and learned from, a little further above.
+                if (nearMargin > 0 && nearMargin <= 250 && history < -16000
+                    && futilityHistory[movedPiece][move.from_sq()][move.to_sq()] < 0)
+                    futilityValue -= 250;
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well
@@ -1468,6 +1481,11 @@ moves_loop:  // When in check, search starts here
         // principal variation or transposition table.
         if (threads.stop.load(std::memory_order_relaxed))
             return VALUE_ZERO;
+
+        // Learn whether quiet moves searched just above the futility margin beat alpha
+        if (nearMargin > 0 && nearMargin <= 300)
+            futilityHistory[movedPiece][move.from_sq()][move.to_sq()]
+              << (value > alpha ? 2048 : -16);
 
         if (rootNode)
         {

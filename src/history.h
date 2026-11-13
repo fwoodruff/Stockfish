@@ -192,6 +192,12 @@ using UnifiedCorrectionHistory =
 template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
+// FutilityHistory records whether quiet moves searched just above the futility margin beat
+// alpha. Its updates centre it on a rate of about 1 in 128, so a negative entry means such
+// moves have rarely been worth searching. Entries start slightly positive, so that about
+// sixteen misses in a row are needed before a move counts as rarely worth searching.
+using FutilityHistory = Stats<i16, 8192, PIECE_NB, SQUARE_NB, SQUARE_NB>;
+
 using TTMoveHistory = StatsEntry<i16, 8192>;
 
 struct ContinuationHistoryBlock {
