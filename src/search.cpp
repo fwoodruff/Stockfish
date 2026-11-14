@@ -125,7 +125,7 @@ void set_profile_term(Worker& w, const Position& pos, Stack* const ss) {
     int sum = 0;
     for (int j = 0; j < PROFILE_SIZE; ++j)
         sum += p.coefficients[j] * ss->profile[j];
-    ss->profileTerm  = 13806 * sum / 16;
+    ss->profileTerm  = 1726 * sum;
     p.lastCorrection = i8(std::clamp(ss->profileTerm / 131072, -127, 127));
 }
 
