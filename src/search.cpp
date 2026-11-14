@@ -720,7 +720,9 @@ void Search::Worker::do_move(Position&    pos,
     // prefetch_key() does not model castling, en passant or promotion exactly.
     // The correction-history prefetches also approximate castling and promotion.
     // For these rare moves the prefetches land on unused lines.
-    prefetch(tt.get_cluster(pos.prefetch_key(move)));
+    const Key nextKey = pos.prefetch_key(move);
+    prefetch(tt.get_cluster(nextKey));
+    prefetch(&profileCache[nextKey & (ProfileCacheSize - 1)]);
 
     if (ss != nullptr)
     {
@@ -736,6 +738,7 @@ void Search::Worker::do_move(Position&    pos,
 
     Dirties& dirties = accumulatorStack.push(pos);
     pos.do_move(move, st, givesCheck, dirties, &sharedHistory);
+    prefetch(&pawn_profile_correction_entry(*this, pos));
 
     if (ss != nullptr)
     {
