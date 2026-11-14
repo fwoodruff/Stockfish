@@ -204,6 +204,79 @@ class AffineTransform {
     }
 
     // Forward propagation
+    // Contributions of 8 groups of inputs to the output (without its bias), input i being in
+    // group (i / 4) % 8. These are the lanes of a SIMD dot product over blocks of 32 inputs,
+    // whose order in memory the weight index gives.
+    void propagate_groups(const InputType* input, OutputType* output) const {
+        static_assert(OutputDimensions == 1 && PaddedInputDimensions % 32 == 0);
+
+        // Sums of the products of the inputs at each position of 4 in a block of 32 in memory
+        OutputType chunkSums[8] = {};
+
+#if defined(ENABLE_SEQ_OPT)
+    #if defined(USE_AVX2)
+        using vec_t = __m256i;
+        #define vec_setzero() _mm256_setzero_si256()
+        #define vec_add_dpbusd_32 SIMD::m256_add_dpbusd_epi32
+        #define vec_store_lanes(p, v) _mm256_storeu_si256(reinterpret_cast<__m256i*>(p), v)
+    #elif defined(USE_SSSE3)
+        using vec_t = __m128i;
+        #define vec_setzero() _mm_setzero_si128()
+        #define vec_add_dpbusd_32 SIMD::m128_add_dpbusd_epi32
+        #define vec_store_lanes(p, v) _mm_storeu_si128(reinterpret_cast<__m128i*>(p), v)
+    #elif defined(USE_NEON_DOTPROD)
+        using vec_t = int32x4_t;
+        #define vec_setzero() vdupq_n_s32(0)
+        #define vec_add_dpbusd_32(acc, a, b) \
+            SIMD::dotprod_m128_add_dpbusd_epi32(acc, vreinterpretq_s8_s32(a), \
+                                                vreinterpretq_s8_s32(b))
+        #define vec_store_lanes(p, v) vst1q_s32(p, v)
+    #elif defined(USE_LASX)
+        using vec_t = __m256i;
+        #define vec_setzero() __lasx_xvldi(0)
+        #define vec_add_dpbusd_32 SIMD::lasx_m256_add_dpbusd_epi32
+        #define vec_store_lanes(p, v) __lasx_xvst(v, p, 0)
+    #elif defined(USE_LSX)
+        using vec_t = __m128i;
+        #define vec_setzero() __lsx_vldi(0)
+        #define vec_add_dpbusd_32 SIMD::lsx_m128_add_dpbusd_epi32
+        #define vec_store_lanes(p, v) __lsx_vst(v, p, 0)
+    #endif
+
+        constexpr IndexType Lanes     = sizeof(vec_t) / sizeof(OutputType);
+        constexpr IndexType NumAccums = 8 / Lanes;
+        constexpr IndexType NumChunks = PaddedInputDimensions * sizeof(InputType) / sizeof(vec_t);
+
+        const auto inputVector = reinterpret_cast<const vec_t*>(input);
+        const auto row         = reinterpret_cast<const vec_t*>(weights);
+        vec_t      acc[NumAccums];
+        for (IndexType k = 0; k < NumAccums; ++k)
+            acc[k] = vec_setzero();
+        for (IndexType j = 0; j < NumChunks; ++j)
+            vec_add_dpbusd_32(acc[j % NumAccums], inputVector[j], row[j]);
+        for (IndexType k = 0; k < NumAccums; ++k)
+            vec_store_lanes(chunkSums + k * Lanes, acc[k]);
+
+    #undef vec_setzero
+    #undef vec_add_dpbusd_32
+    #undef vec_store_lanes
+#else
+        for (IndexType i = 0; i < PaddedInputDimensions; ++i)
+            chunkSums[i / 4 % 8] += weights[i] * input[i];
+#endif
+
+        for (IndexType g = 0; g < 8; ++g)
+            output[g] = chunkSums[get_weight_index(g * 4) / 4];
+
+#ifndef NDEBUG
+        OutputType check[8] = {};
+        for (IndexType i = 0; i < InputDimensions; ++i)
+            check[i / 4 % 8] += weights[get_weight_index(i)] * input[get_weight_index(i)];
+        for (IndexType g = 0; g < 8; ++g)
+            assert(output[g] == check[g]);
+#endif
+    }
+
     void propagate(const InputType* input, OutputType* output) const {
 
 #ifdef ENABLE_SEQ_OPT

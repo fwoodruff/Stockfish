@@ -53,6 +53,7 @@ struct NetworkArchitecture {
     static constexpr IndexType TransformedFeatureDimensions = L1;
     static constexpr int       FC_0_OUTPUTS                 = L2;
     static constexpr int       FC_1_OUTPUTS                 = L3;
+    static constexpr int       PartialEvaluations = 8;  // fixed by fc_2.propagate_groups()
 
     Layers::AffineTransformSparseInput<TransformedFeatureDimensions, FC_0_OUTPUTS> fc_0;
     Layers::SqrClippedReLU<FC_0_OUTPUTS, WeightScaleBits + 1>                      ac_sqr_0;
@@ -94,7 +95,8 @@ struct NetworkArchitecture {
     }
 
     i32 propagate(const TransformedFeatureType* transformedFeatures,
-                  const NNZInfo<L1>&            nnzInfo) const {
+                  const NNZInfo<L1>&            nnzInfo,
+                  i32*                          partialEvals = nullptr) const {
         struct alignas(CacheLineSize) Buffer {
             alignas(CacheLineSize) typename decltype(fc_0)::OutputBuffer fc_0_out;
             alignas(CacheLineSize) typename decltype(ac_sqr_0)::OutputType
@@ -124,6 +126,11 @@ struct NetworkArchitecture {
 #endif
 
         fc_2.propagate(buffer.concat_buffer, buffer.fc_2_out);
+
+        // Optionally split the final layer's output into the contributions of groups of its
+        // inputs, a compact description of the position
+        if (partialEvals)
+            fc_2.propagate_groups(buffer.concat_buffer, partialEvals);
 
         static_assert(FC_0_OUTPUTS >= 2);
         i32 fwdOut = buffer.fc_2_out[0];

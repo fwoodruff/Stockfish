@@ -185,12 +185,35 @@ struct CorrHistTypedef<Continuation> {
 
 }
 
-using UnifiedCorrectionHistory =
-  DynStats<MultiArray<CorrectionBundle<i16, CORRECTION_HISTORY_LIMIT>, COLOR_NB>,
-           CORRHIST_BASE_SIZE>;
-
 template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
+
+// The position profile is a compact description of a position: the contributions of
+// PROFILE_SIZE groups of the network's final-layer inputs to its evaluation.
+// The pawn profile correction extends the pawn correction history, which acts as its
+// intercept, with how the static evaluation error depends on each profile component.
+// Its coefficients are kept at half resolution so that they fit in 8 bits, and next to
+// the correction histories of each key, in the same cache line.
+constexpr int PROFILE_SIZE             = 8;
+constexpr int PROFILE_CORRECTION_LIMIT = 127;
+
+struct alignas(32) UnifiedCorrectionEntry {
+    MultiArray<CorrectionBundle<i16, CORRECTION_HISTORY_LIMIT>, COLOR_NB> bundles;
+    StatsEntry<i8, PROFILE_CORRECTION_LIMIT, true> profile[COLOR_NB][PROFILE_SIZE];
+
+    auto&       operator[](Color c) { return bundles[c]; }
+    const auto& operator[](Color c) const { return bundles[c]; }
+
+    void fill(int v) {
+        bundles.fill(v);
+        for (auto& coefficients : profile)
+            for (auto& coefficient : coefficients)
+                coefficient = 0;
+    }
+};
+static_assert(sizeof(UnifiedCorrectionEntry) == 32);
+
+using UnifiedCorrectionHistory = DynStats<UnifiedCorrectionEntry, CORRHIST_BASE_SIZE>;
 
 using TTMoveHistory = StatsEntry<i16, 8192>;
 

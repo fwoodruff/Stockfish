@@ -130,6 +130,9 @@ struct Stack {
     int                         cutoffCnt;
     int                         reduction;
     int                         priorNMPFailHigh;
+    i8                          profile[PROFILE_SIZE];
+    bool                        hasProfile;
+    int                         profileTerm;
 };
 
 
@@ -331,6 +334,7 @@ class Worker {
     ButterflyHistory mainHistory;
     LowPlyHistory    lowPlyHistory;
 
+
     CapturePieceToHistory           captureHistory;
     CorrectionHistory<Continuation> continuationCorrectionHistory;
 
@@ -371,7 +375,7 @@ class Worker {
 
     TimePoint elapsed() const;
 
-    Value evaluate(const Position&);
+    Value evaluate(const Position&, i32* partialEvals = nullptr);
 
     LimitsType limits;
 

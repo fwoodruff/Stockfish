@@ -92,6 +92,38 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
+static_assert(Eval::NNUE::NetworkArchitecture::PartialEvaluations == PROFILE_SIZE);
+
+// Computes the position profile from the network's partial evaluations
+void set_profile(Stack* ss, const i32* partialEvals) {
+    for (int j = 0; j < PROFILE_SIZE; ++j)
+        ss->profile[j] = i8(std::clamp(partialEvals[j] / 800, -127, 127));
+    ss->hasProfile = true;
+}
+
+auto& pawn_profile_correction_entry(Worker& w, const Position& pos) {
+    return w.sharedHistory.pawn_correction_entry(pos).profile[pos.side_to_move()];
+}
+
+// Correction of the static evaluation from the position profile. It is applied only where the
+// static evaluation is used as a value, not to the decisions based on it.
+void set_profile_term(Worker& w, const Position& pos, Stack* const ss) {
+    ss->profileTerm = 0;
+    if (!ss->hasProfile)
+        return;
+
+    const auto& c   = pawn_profile_correction_entry(w, pos);
+    int         sum = 0;
+    for (int j = 0; j < PROFILE_SIZE; ++j)
+        sum += c[j] * ss->profile[j];
+    ss->profileTerm = 13806 * sum / 16;
+}
+
+Value with_profile_correction(const Value v, const Stack* const ss) {
+    return std::clamp(v + ss->profileTerm / 131072, VALUE_TB_LOSS_IN_MAX_PLY + 1,
+                      VALUE_TB_WIN_IN_MAX_PLY - 1);
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -117,12 +149,15 @@ Value to_corrected_static_eval(const Value v, const int cv) {
     return std::clamp(v + cv / 131072, VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
 }
 
+template<typename BonusFn>
 void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
-                               const int       bonus) {
-    const Move  m  = (ss - 1)->currentMove;
-    const Color us = pos.side_to_move();
+                               const BonusFn&  bonusFn,
+                               const int       error) {
+    const int   bonus = bonusFn(error);
+    const Move  m     = (ss - 1)->currentMove;
+    const Color us    = pos.side_to_move();
 
     constexpr int nonPawnWeight = 186;
     auto&         shared        = workerThread.sharedHistory;
@@ -131,6 +166,16 @@ void update_correction_history(const Position& pos,
     shared.minor_piece_correction_entry(pos)[us].minor << bonus * 150 / 128;
     shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
+
+    // The pawn profile correction learns the error that remains after it,
+    // four times as fast as the pawn correction history
+    if (ss->hasProfile)
+    {
+        auto&     c            = pawn_profile_correction_entry(workerThread, pos);
+        const int profileBonus = 4 * bonusFn(error - ss->profileTerm / 131072);
+        for (int j = 0; j < PROFILE_SIZE; ++j)
+            c[j] << profileBonus * ss->profile[j] / 64;
+    }
 
     if (m.is_ok())
     {
@@ -845,9 +890,14 @@ Value Search::Worker::search(
     // Step 5. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
 
+    i32 partialEvals[PROFILE_SIZE];
+
     // Skip early pruning when in check
     if (ss->inCheck)
+    {
         ss->staticEval = eval = (ss - 2)->staticEval;
+        ss->hasProfile        = false;
+    }
     else if (excludedMove)
         unadjustedStaticEval = eval = ss->staticEval;
     else if (ss->ttHit)
@@ -855,8 +905,14 @@ Value Search::Worker::search(
         // Never assume anything about values stored in TT
         unadjustedStaticEval = ttData.eval;
         if (!is_valid(unadjustedStaticEval))
-            unadjustedStaticEval = evaluate(pos);
+        {
+            unadjustedStaticEval = evaluate(pos, partialEvals);
+            set_profile(ss, partialEvals);
+        }
+        else
+            ss->hasProfile = false;
 
+        set_profile_term(*this, pos, ss);
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // ttValue can be used as a better position evaluation
@@ -866,7 +922,9 @@ Value Search::Worker::search(
     }
     else
     {
-        unadjustedStaticEval = evaluate(pos);
+        unadjustedStaticEval = evaluate(pos, partialEvals);
+        set_profile(ss, partialEvals);
+        set_profile_term(*this, pos, ss);
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // Static evaluation is saved as it was before adjustment by correction history
@@ -1030,7 +1088,9 @@ Value Search::Worker::search(
                              + std::abs(correctionValue) / 198435;
 
         if (eval - futilityMargin >= beta)
-            return (661 * beta + 363 * eval) / 1024;
+            return (661 * beta
+                    + 363 * (eval == ss->staticEval ? with_profile_correction(eval, ss) : eval))
+                 / 1024;
     }
 
     // Step 10. Null move search with verification search
@@ -1310,10 +1370,11 @@ moves_loop:  // When in check, search starts here
 
                 if (!ss->inCheck && value > ss->staticEval)
                 {
-                    const int bonus =
-                      std::clamp(int(value - ss->staticEval) * 664 / 1024,
-                                 -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-                    update_correction_history(pos, ss, *this, bonus);
+                    auto bonus = [&](int error) {
+                        return std::clamp(error * 664 / 1024, -CORRECTION_HISTORY_LIMIT / 4,
+                                          CORRECTION_HISTORY_LIMIT / 4);
+                    };
+                    update_correction_history(pos, ss, *this, bonus, value - ss->staticEval);
                 }
 
                 return value;
@@ -1662,10 +1723,13 @@ moves_loop:  // When in check, search starts here
     if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
         && (bestValue > ss->staticEval) == bool(bestMove))
     {
-        auto bonus =
-          std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 18) / 128,
-                     -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-        update_correction_history(pos, ss, *this, 1061 * bonus / 1024);
+        auto bonus = [&](int error) {
+            return 1061
+                 * std::clamp(error * depth * (bestMove ? 12 : 18) / 128,
+                              -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4)
+                 / 1024;
+        };
+        update_correction_history(pos, ss, *this, bonus, bestValue - ss->staticEval);
     }
 
     // The search is now complete
@@ -1743,6 +1807,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
     // Step 4. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
+    i32   partialEvals[PROFILE_SIZE];
+    ss->hasProfile = false;
     if (ss->inCheck)
         bestValue = futilityBase = -VALUE_INFINITE;
     else
@@ -1755,10 +1821,14 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             unadjustedStaticEval = ttData.eval;
 
             if (!is_valid(unadjustedStaticEval))
-                unadjustedStaticEval = evaluate(pos);
+            {
+                unadjustedStaticEval = evaluate(pos, partialEvals);
+                set_profile(ss, partialEvals);
+            }
 
-            ss->staticEval = bestValue =
-              to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+            set_profile_term(*this, pos, ss);
+            ss->staticEval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+            bestValue      = with_profile_correction(ss->staticEval, ss);
 
             // ttValue can be used as a better position evaluation
             if (is_valid(ttData.value) && !is_decisive(ttData.value)
@@ -1767,9 +1837,11 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         }
         else
         {
-            unadjustedStaticEval = evaluate(pos);
-            ss->staticEval       = bestValue =
-              to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+            unadjustedStaticEval = evaluate(pos, partialEvals);
+            set_profile(ss, partialEvals);
+            set_profile_term(*this, pos, ss);
+            ss->staticEval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+            bestValue      = with_profile_correction(ss->staticEval, ss);
         }
 
         // Stand pat. Return immediately if static value is at least beta
@@ -1926,9 +1998,9 @@ TimePoint Search::Worker::elapsed() const {
 
 // Evaluate the current position of the game tree, from the point of view of
 // the side to move.
-Value Search::Worker::evaluate(const Position& pos) {
+Value Search::Worker::evaluate(const Position& pos, i32* partialEvals) {
     return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,
-                          optimism[pos.side_to_move()]);
+                          optimism[pos.side_to_move()], partialEvals);
 }
 
 namespace {
