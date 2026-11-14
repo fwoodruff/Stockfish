@@ -130,6 +130,9 @@ struct Stack {
     int                         cutoffCnt;
     int                         reduction;
     int                         priorNMPFailHigh;
+    i8                          profile[PROFILE_SIZE];
+    bool                        hasProfile;
+    int                         profileTerm;
 };
 
 
@@ -331,6 +334,17 @@ class Worker {
     ButterflyHistory mainHistory;
     LowPlyHistory    lowPlyHistory;
 
+    alignas(64) ProfileCorrectionHistory pawnProfileCorrection;
+
+    // Position profiles by position key, for positions whose static evaluation
+    // comes from the TT
+    struct ProfileCacheEntry {
+        u16 tag;
+        i8  profile[PROFILE_SIZE];
+    };
+    static constexpr usize         ProfileCacheSize = 1 << 17;
+    std::vector<ProfileCacheEntry> profileCache;
+
     CapturePieceToHistory           captureHistory;
     CorrectionHistory<Continuation> continuationCorrectionHistory;
 
@@ -371,7 +385,7 @@ class Worker {
 
     TimePoint elapsed() const;
 
-    Value evaluate(const Position&);
+    Value evaluate(const Position&, i32* partialEvals = nullptr);
 
     LimitsType limits;
 

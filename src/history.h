@@ -192,6 +192,17 @@ using UnifiedCorrectionHistory =
 template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
+// The position profile is a compact description of a position: the contributions of
+// PROFILE_SIZE groups of the network's final-layer inputs to its evaluation.
+// The pawn profile correction extends the pawn correction history, which acts as its
+// intercept, with how the static evaluation error depends on each profile component.
+// Its coefficients are kept at half resolution so that they fit in 8 bits.
+constexpr int PROFILE_SIZE             = 8;
+constexpr int PROFILE_CORRECTION_SIZE  = 16384;
+constexpr int PROFILE_CORRECTION_LIMIT = 127;
+using ProfileCorrectionHistory =
+  Stats<i8, PROFILE_CORRECTION_LIMIT, PROFILE_CORRECTION_SIZE, COLOR_NB, PROFILE_SIZE>;
+
 using TTMoveHistory = StatsEntry<i16, 8192>;
 
 struct ContinuationHistoryBlock {
