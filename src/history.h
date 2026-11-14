@@ -193,22 +193,31 @@ using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 // The pawn profile correction extends the pawn correction history, which acts as its
 // intercept, with how the static evaluation error depends on each profile component.
 // Its coefficients are kept at half resolution so that they fit in 8 bits, and next to
-// the correction histories of each key, in the same cache line.
-constexpr int PROFILE_SIZE             = 8;
+// the correction histories of each key, in the same cache line. The last correction
+// computed stands in for positions whose profile is not known.
+constexpr int PROFILE_SIZE             = 7;
 constexpr int PROFILE_CORRECTION_LIMIT = 127;
+
+struct ProfileCorrection {
+    StatsEntry<i8, PROFILE_CORRECTION_LIMIT, true> coefficients[PROFILE_SIZE];
+    RelaxedAtomic<i8>                              lastCorrection;
+};
 
 struct alignas(32) UnifiedCorrectionEntry {
     MultiArray<CorrectionBundle<i16, CORRECTION_HISTORY_LIMIT>, COLOR_NB> bundles;
-    StatsEntry<i8, PROFILE_CORRECTION_LIMIT, true> profile[COLOR_NB][PROFILE_SIZE];
+    ProfileCorrection                                                     profile[COLOR_NB];
 
     auto&       operator[](Color c) { return bundles[c]; }
     const auto& operator[](Color c) const { return bundles[c]; }
 
     void fill(int v) {
         bundles.fill(v);
-        for (auto& coefficients : profile)
-            for (auto& coefficient : coefficients)
+        for (auto& p : profile)
+        {
+            for (auto& coefficient : p.coefficients)
                 coefficient = 0;
+            p.lastCorrection = 0;
+        }
     }
 };
 static_assert(sizeof(UnifiedCorrectionEntry) == 32);

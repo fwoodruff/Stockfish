@@ -92,12 +92,17 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
-static_assert(Eval::NNUE::NetworkArchitecture::PartialEvaluations == PROFILE_SIZE);
+constexpr int PartialEvaluations = Eval::NNUE::NetworkArchitecture::PartialEvaluations;
+static_assert(PartialEvaluations == PROFILE_SIZE + 1);
 
-// Computes the position profile from the network's partial evaluations
+// Computes the position profile from the network's partial evaluations, the last two
+// of which are merged
 void set_profile(Stack* ss, const i32* partialEvals) {
     for (int j = 0; j < PROFILE_SIZE; ++j)
-        ss->profile[j] = i8(std::clamp(partialEvals[j] / 800, -127, 127));
+    {
+        const i32 partialEval = partialEvals[j] + (j == PROFILE_SIZE - 1 ? partialEvals[j + 1] : 0);
+        ss->profile[j]        = i8(std::clamp(partialEval / 800, -127, 127));
+    }
     ss->hasProfile = true;
 }
 
@@ -106,17 +111,22 @@ auto& pawn_profile_correction_entry(Worker& w, const Position& pos) {
 }
 
 // Correction of the static evaluation from the position profile. It is applied only where the
-// static evaluation is used as a value, not to the decisions based on it.
+// static evaluation is used as a value, not to the decisions based on it. Without a profile,
+// the last correction for the pawn structure stands in for it.
 void set_profile_term(Worker& w, const Position& pos, Stack* const ss) {
-    ss->profileTerm = 0;
-    if (!ss->hasProfile)
-        return;
+    auto& p = pawn_profile_correction_entry(w, pos);
 
-    const auto& c   = pawn_profile_correction_entry(w, pos);
-    int         sum = 0;
+    if (!ss->hasProfile)
+    {
+        ss->profileTerm = p.lastCorrection * 131072;
+        return;
+    }
+
+    int sum = 0;
     for (int j = 0; j < PROFILE_SIZE; ++j)
-        sum += c[j] * ss->profile[j];
-    ss->profileTerm = 13806 * sum / 16;
+        sum += p.coefficients[j] * ss->profile[j];
+    ss->profileTerm  = 13806 * sum / 16;
+    p.lastCorrection = i8(std::clamp(ss->profileTerm / 131072, -127, 127));
 }
 
 Value with_profile_correction(const Value v, const Stack* const ss) {
@@ -171,7 +181,7 @@ void update_correction_history(const Position& pos,
     // four times as fast as the pawn correction history
     if (ss->hasProfile)
     {
-        auto&     c            = pawn_profile_correction_entry(workerThread, pos);
+        auto&     c            = pawn_profile_correction_entry(workerThread, pos).coefficients;
         const int profileBonus = 4 * bonusFn(error - ss->profileTerm / 131072);
         for (int j = 0; j < PROFILE_SIZE; ++j)
             c[j] << profileBonus * ss->profile[j] / 64;
@@ -890,7 +900,7 @@ Value Search::Worker::search(
     // Step 5. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
 
-    i32 partialEvals[PROFILE_SIZE];
+    i32 partialEvals[PartialEvaluations];
 
     // Skip early pruning when in check
     if (ss->inCheck)
@@ -1807,7 +1817,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
     // Step 4. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
-    i32   partialEvals[PROFILE_SIZE];
+    i32   partialEvals[PartialEvaluations];
     ss->hasProfile = false;
     if (ss->inCheck)
         bestValue = futilityBase = -VALUE_INFINITE;
