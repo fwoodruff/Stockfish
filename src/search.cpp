@@ -120,9 +120,13 @@ Value to_corrected_static_eval(const Value v, const int cv) {
 void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
-                               const int       bonus) {
+                               const int       bonus,
+                               const int       error) {
     const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
+
+    if (ss->hasHidden && std::abs(error) < 400)
+        workerThread.update_hidden_adjust(ss, error);
 
     constexpr int nonPawnWeight = 186;
     auto&         shared        = workerThread.sharedHistory;
@@ -712,6 +716,9 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
     mainHistory.fill(-5);
+    for (auto& adjust : hiddenAdjust)
+        adjust.fill(0);
+    hiddenErrorMean = 0;
     captureHistory.fill(-742);
 
     // Each thread clears its part of the dynamically-sized shared histories.
@@ -847,15 +854,19 @@ Value Search::Worker::search(
 
     // Skip early pruning when in check
     if (ss->inCheck)
+    {
         ss->staticEval = eval = (ss - 2)->staticEval;
+        ss->hasHidden         = false;
+    }
     else if (excludedMove)
         unadjustedStaticEval = eval = ss->staticEval;
     else if (ss->ttHit)
     {
         // Never assume anything about values stored in TT
         unadjustedStaticEval = ttData.eval;
-        if (!is_valid(unadjustedStaticEval))
-            unadjustedStaticEval = evaluate(pos);
+        ss->hasHidden        = !is_valid(unadjustedStaticEval);
+        if (ss->hasHidden)
+            unadjustedStaticEval = evaluate(pos, ss);
 
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
@@ -866,7 +877,8 @@ Value Search::Worker::search(
     }
     else
     {
-        unadjustedStaticEval = evaluate(pos);
+        unadjustedStaticEval = evaluate(pos, ss);
+        ss->hasHidden        = true;
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // Static evaluation is saved as it was before adjustment by correction history
@@ -1313,7 +1325,7 @@ moves_loop:  // When in check, search starts here
                     const int bonus =
                       std::clamp(int(value - ss->staticEval) * 664 / 1024,
                                  -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-                    update_correction_history(pos, ss, *this, bonus);
+                    update_correction_history(pos, ss, *this, bonus, value - ss->staticEval);
                 }
 
                 return value;
@@ -1665,7 +1677,7 @@ moves_loop:  // When in check, search starts here
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 18) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-        update_correction_history(pos, ss, *this, 1061 * bonus / 1024);
+        update_correction_history(pos, ss, *this, 1061 * bonus / 1024, bestValue - ss->staticEval);
     }
 
     // The search is now complete
@@ -1926,9 +1938,33 @@ TimePoint Search::Worker::elapsed() const {
 
 // Evaluate the current position of the game tree, from the point of view of
 // the side to move.
-Value Search::Worker::evaluate(const Position& pos) {
+// Learn the shift of the second hidden layer by normalised gradient descent on the static
+// evaluation error, centred on its running mean
+void Search::Worker::update_hidden_adjust(const Stack* ss, int error) {
+
+    hiddenErrorMean += error - hiddenErrorMean / 1024;
+
+    i32 gradient[Eval::NNUE::NetworkArchitecture::FC_1_OUTPUTS];
+    network[numaAccessToken].fc1_gradient(ss->hiddenBucket, ss->hiddenPre, gradient);
+
+    i64 norm = 1;
+    for (i32 g : gradient)
+        norm += i64(g) * g;
+
+    // A normalised step that moves the evaluation by about 3% of the centred error. The rate
+    // combines it with the gradient's units and the adjustment's 8 fractional bits.
+    constexpr i64 Rate   = 54975581;
+    const i64     step   = Rate * (error - hiddenErrorMean / 1024) * 65536 / norm;
+    auto&         adjust = hiddenAdjust[ss->hiddenBucket];
+    for (usize k = 0; k < adjust.size(); ++k)
+        adjust[k] =
+          i32(std::clamp<i64>(adjust[k] + step * gradient[k] / 65536, -2048 * 256, 2048 * 256));
+}
+
+Value Search::Worker::evaluate(const Position& pos, Stack* ss) {
     return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,
-                          optimism[pos.side_to_move()]);
+                          optimism[pos.side_to_move()], &hiddenAdjust[0][0],
+                          ss ? ss->hiddenPre : nullptr, ss ? &ss->hiddenBucket : nullptr);
 }
 
 namespace {

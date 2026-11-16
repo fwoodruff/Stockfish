@@ -49,10 +49,13 @@ Value Eval::evaluate(const Eval::NNUE::Network&     network,
                      const Position&                pos,
                      Eval::NNUE::AccumulatorStack&  accumulators,
                      Eval::NNUE::AccumulatorCaches& caches,
-                     int                            optimism) {
+                     int                            optimism,
+                     const i32*                     fc1Adjust,
+                     i32*                           fc1Capture,
+                     u16*                           bucketOut) {
 
     assert(!pos.checkers());
-    Value nnue = network.evaluate(pos, accumulators, caches);
+    Value nnue = network.evaluate(pos, accumulators, caches, fc1Adjust, fc1Capture, bucketOut);
     return scale_evaluation(nnue, optimism, pos);
 }
 
