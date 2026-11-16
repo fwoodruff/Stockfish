@@ -176,6 +176,9 @@ class AffineTransform {
 #endif
     }
 
+    // Weight by its logical index (output * PaddedInputDimensions + input)
+    WeightType weight(IndexType i) const { return weights[get_weight_index(i)]; }
+
     // Read network parameters
     bool read_parameters(std::istream& stream) {
         read_little_endian<BiasType>(stream, biases, OutputDimensions);

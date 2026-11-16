@@ -158,7 +158,10 @@ int Network::layer_stack(const Position& pos) const {
 
 Value Network::evaluate(const Position&    pos,
                         AccumulatorStack&  accumulatorStack,
-                        AccumulatorCaches& cache) const {
+                        AccumulatorCaches& cache,
+                        const i32*         fc1Adjust,
+                        i32*               fc1Capture,
+                        u16*               bucketOut) const {
 
     constexpr u64 alignment = CacheLineSize;
 
@@ -171,7 +174,11 @@ Value Network::evaluate(const Position&    pos,
     const int bucket = layer_stack(pos);
 
     featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, nnzInfo);
-    const auto positional = network[bucket].propagate(transformedFeatures, nnzInfo);
+    if (bucketOut)
+        *bucketOut = u16(bucket);
+    const auto positional = network[bucket].propagate(
+      transformedFeatures, nnzInfo,
+      fc1Adjust ? fc1Adjust + bucket * NetworkArchitecture::FC_1_OUTPUTS : nullptr, fc1Capture);
     return static_cast<Value>(positional / OutputScale);
 }
 
