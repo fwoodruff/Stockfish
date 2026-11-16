@@ -95,8 +95,7 @@ struct NetworkArchitecture {
 
     i32 propagate(const TransformedFeatureType* transformedFeatures,
                   const NNZInfo<L1>&            nnzInfo,
-                  const i32*                    fc1Adjust  = nullptr,
-                  i32*                          fc1Capture = nullptr) const {
+                  const i32*                    fc1Shift = nullptr) const {
         struct alignas(CacheLineSize) Buffer {
             alignas(CacheLineSize) typename decltype(fc_0)::OutputBuffer fc_0_out;
             alignas(CacheLineSize) typename decltype(ac_sqr_0)::OutputType
@@ -118,13 +117,10 @@ struct NetworkArchitecture {
 
         fc_1.propagate(buffer.concat_buffer, buffer.fc_1_out);
 
-        // Optionally shift the second hidden layer's pre-activations (given with 8 fractional
-        // bits), and record them
-        if (fc1Adjust)
+        // Optionally shift the second hidden layer's pre-activations (8 fractional bits)
+        if (fc1Shift)
             for (int k = 0; k < FC_1_OUTPUTS; ++k)
-                buffer.fc_1_out[k] += fc1Adjust[k] >> 8;
-        if (fc1Capture)
-            std::copy(buffer.fc_1_out, buffer.fc_1_out + FC_1_OUTPUTS, fc1Capture);
+                buffer.fc_1_out[k] += fc1Shift[k] >> 8;
 #if defined(USE_PAIR_ACTIVATIONS)
         ac_sqr_1.propagate_pair(buffer.fc_1_out, buffer.concat_buffer + FC_0_OUTPUTS * 2,
                                 buffer.concat_buffer + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS);
@@ -149,20 +145,6 @@ struct NetworkArchitecture {
 
         i32 outputValue = static_cast<i32>((static_cast<i64>(fwdOut) * multiplier) / denominator);
         return outputValue;
-    }
-
-    // Gradient of the output layer with respect to the second hidden layer's pre-activations z,
-    // from both of its activations' paths, in units of 2^-(2 * WeightScaleBits + 6) per unit of z
-    void fc1_gradient(const i32* z, i32* gradient) const {
-        constexpr int SqrShift = 2 * WeightScaleBits + 7;
-        for (int k = 0; k < FC_1_OUTPUTS; ++k)
-        {
-            const bool      sqrActive = ((i64(z[k]) * z[k]) >> SqrShift) < 127;
-            const bool      active    = z[k] >= 0 && (z[k] >> WeightScaleBits) < 127;
-            const IndexType i         = FC_0_OUTPUTS * 2 + k;
-            gradient[k] = (sqrActive ? z[k] * fc_2.weight(i) : 0)
-                        + (active ? fc_2.weight(i + FC_1_OUTPUTS) * (1 << (WeightScaleBits + 6)) : 0);
-        }
     }
 
     usize get_content_hash() const {

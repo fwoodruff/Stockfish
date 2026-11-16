@@ -130,9 +130,6 @@ struct Stack {
     int                         cutoffCnt;
     int                         reduction;
     int                         priorNMPFailHigh;
-    i32                         hiddenPre[Eval::NNUE::NetworkArchitecture::FC_1_OUTPUTS];
-    u16                         hiddenBucket;
-    bool                        hasHidden;
 };
 
 
@@ -333,14 +330,14 @@ class Worker {
     // Public because they need to be updatable by the stats
     ButterflyHistory mainHistory;
 
-    // Per-game shift of the network's second hidden layer (8 fractional bits), learned from the
-    // static evaluation error, one set per layer stack
+    // Slowly drifting random shift of the network's second hidden layer (8 fractional bits),
+    // one set per layer stack
     std::array<std::array<i32, Eval::NNUE::NetworkArchitecture::FC_1_OUTPUTS>,
                Eval::NNUE::LayerStacks>
-        hiddenAdjust;
-    i32 hiddenErrorMean;  // 1024 times the running mean of the error
+        hiddenShift;
+    u64 hiddenShiftSeed;
 
-    void update_hidden_adjust(const Stack* ss, int error);
+    void drift_hidden_shift();
     LowPlyHistory    lowPlyHistory;
 
     CapturePieceToHistory           captureHistory;
@@ -383,7 +380,7 @@ class Worker {
 
     TimePoint elapsed() const;
 
-    Value evaluate(const Position&, Stack* ss = nullptr);
+    Value evaluate(const Position&);
 
     LimitsType limits;
 

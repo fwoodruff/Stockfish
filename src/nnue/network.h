@@ -66,13 +66,7 @@ class Network {
     Value evaluate(const Position&    pos,
                    AccumulatorStack&  accumulatorStack,
                    AccumulatorCaches& cache,
-                   const i32*         fc1Adjust  = nullptr,
-                   i32*               fc1Capture = nullptr,
-                   u16*               bucketOut  = nullptr) const;
-
-    void fc1_gradient(int bucket, const i32* z, i32* gradient) const {
-        network[bucket].fc1_gradient(z, gradient);
-    }
+                   const i32*         fc1Shift = nullptr) const;
 
 
     void verify(const std::function<void(std::string_view)>& f,
