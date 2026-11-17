@@ -1019,18 +1019,22 @@ Value Search::Worker::search(
 
     // Step 9. Futility pruning: child node
     // The depth condition is important for mate finding. It should NOT be tuned.
-    if (!ss->ttPv && depth < (seekMate ? 6 : 19) && eval >= beta && (!ttData.move || ttCapture)
-        && !is_loss(beta) && !is_win(eval))
+    // Weigh the correction history half as much again here, both in the evaluation and in the
+    // margin: it separates nodes worth pruning more cheaply than the margin does
+    if (Value futilityEval = eval + (eval == ss->staticEval ? correctionValue / 262144 : 0);
+        !ss->ttPv && depth < (seekMate ? 6 : 19) && futilityEval >= beta
+        && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(futilityEval))
     {
         Value futilityMult = std::min(45 + depth * 4, 85);
         futilityMult -= 20 * !ss->ttHit;
 
         Value futilityMargin = futilityMult * depth
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
-                             + std::abs(correctionValue) / 198435;
+                             + std::abs(correctionValue) / 198435 + std::abs(correctionValue) / 396870
+                             - 14;
 
-        if (eval - futilityMargin >= beta)
-            return (661 * beta + 363 * eval) / 1024;
+        if (futilityEval - futilityMargin >= beta)
+            return (661 * beta + 363 * futilityEval) / 1024;
     }
 
     // Step 10. Null move search with verification search
