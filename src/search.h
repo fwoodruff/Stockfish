@@ -329,6 +329,10 @@ class Worker {
 
     // Public because they need to be updatable by the stats
     ButterflyHistory mainHistory;
+
+    // 256 times the running means of the correction history update before and after weighting
+    // it by the subtree's cost
+    int corrBonusMean, corrWeightedBonusMean, corrDriftCarry;
     LowPlyHistory    lowPlyHistory;
 
     CapturePieceToHistory           captureHistory;
