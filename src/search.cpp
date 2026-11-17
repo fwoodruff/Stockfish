@@ -712,6 +712,7 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
     mainHistory.fill(-5);
+    corrBonusMean = corrWeightedBonusMean = corrDriftCarry = 0;
     captureHistory.fill(-742);
 
     // Each thread clears its part of the dynamically-sized shared histories.
@@ -781,6 +782,7 @@ Value Search::Worker::search(
     SearchedList quietsSearched;
 
     // Step 1. Initialize node
+    const u64 nodesAtEntry = u64(nodes);
     ss->inCheck   = pos.checkers();
     priorCapture  = pos.captured_piece();
     Color us      = pos.side_to_move();
@@ -1665,6 +1667,18 @@ moves_loop:  // When in check, search starts here
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 18) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
+
+        // Learn a little more from nodes whose subtree was cheaper than usual for their depth,
+        // and a little less from costlier ones, keeping the average update as before
+        constexpr int TypicalLog2Nodes[16] = {0, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 5, 6, 6, 6, 7};
+        const int     excess   = msb(u64(nodes) - nodesAtEntry + 1) - TypicalLog2Nodes[std::min(depth, 15)];
+        const int     weighted = bonus * (16 - std::clamp(excess, -2, 2)) / 16;
+        corrBonusMean += bonus - corrBonusMean / 256;
+        corrWeightedBonusMean += weighted - corrWeightedBonusMean / 256;
+        corrDriftCarry += corrBonusMean - corrWeightedBonusMean;
+        bonus = weighted + corrDriftCarry / 256;
+        corrDriftCarry %= 256;
+
         update_correction_history(pos, ss, *this, 1061 * bonus / 1024);
     }
 
