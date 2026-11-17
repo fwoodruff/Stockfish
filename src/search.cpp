@@ -781,6 +781,7 @@ Value Search::Worker::search(
     SearchedList quietsSearched;
 
     // Step 1. Initialize node
+    const u64 nodesAtEntry = u64(nodes);
     ss->inCheck   = pos.checkers();
     priorCapture  = pos.captured_piece();
     Color us      = pos.side_to_move();
@@ -1665,6 +1666,14 @@ moves_loop:  // When in check, search starts here
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 18) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
+
+        // Learn more from nodes whose subtree was costlier than usual for their depth (close
+        // positions, where small errors decide between moves), and less from cheap ones
+        // (quick refutations, whose large errors rarely matter)
+        constexpr int TypicalLog2Nodes[16] = {0, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 5, 6, 6, 6, 7};
+        const int     excess = msb(u64(nodes) - nodesAtEntry + 1) - TypicalLog2Nodes[std::min(depth, 15)];
+        bonus = bonus * (4 + std::clamp(excess, -2, 2)) / 4;
+
         update_correction_history(pos, ss, *this, 1061 * bonus / 1024);
     }
 
