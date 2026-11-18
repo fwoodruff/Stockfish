@@ -351,6 +351,9 @@ class Worker {
     void undo_move(Position& pos, const Move move);
     void undo_null_move(Position& pos);
 
+    Value probe_pv(int plies, Depth depth, Value threshold);
+    bool  pv_in_trouble(Value score);
+
     // This is the main search function, for both PV and non-PV nodes
     template<NodeType nodeType>
     Value

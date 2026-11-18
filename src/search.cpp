@@ -291,8 +291,9 @@ bool Search::Worker::iterative_deepening() {
     Value  alpha, beta;
     Value  bestValue     = -VALUE_INFINITE;
     Color  us            = rootPos.side_to_move();
-    double timeReduction = 1, totBestMoveChanges = 0;
-    int    delta, iterIdx                        = 0;
+    double timeReduction = 1, totBestMoveChanges = 0, troubleTime = 1;
+    bool   troubleChecked = false;
+    int    delta, iterIdx = 0;
 
     // Allocate stack with extra size to allow access from (ss - 7) to (ss + 2):
     // (ss - 7) is needed for update_continuation_histories(ss - 1) which accesses (ss - 6),
@@ -610,7 +611,7 @@ bool Search::Worker::iterative_deepening() {
               interpolate(i64(nodesEffort), i64(75800), i64(104510), 0.969, 0.714), 0.693, 0.838);
 
             double totalTime = mainThread->tm.optimum() * fallingEval * reduction
-                             * bestMoveInstability * highBestMoveEffort;
+                             * bestMoveInstability * highBestMoveEffort * troubleTime * 0.996;
 
             if (rootMoves.size() == 1)
                 // Cap used time to 0.5s for a better viewer experience
@@ -620,8 +621,24 @@ bool Search::Worker::iterative_deepening() {
 
             // Stop the search if we have exceeded totalTime or maximum time,
             // or if we know that there are no better moves in the analysed line(s).
-            if (elapsedTime > std::min(totalTime, double(mainThread->tm.maximum()))
-                || rootMoves[multiPV - 1].score >= mate_in(3) || rootMoves[0].score == mated_in(2))
+            bool stopNow = elapsedTime > std::min(totalTime, double(mainThread->tm.maximum()));
+
+            // Before stopping, check once per move whether the PV holds up when searched again from
+            // positions near its end. If it falls short at every step of the check, spend more time.
+            if (stopNow && !troubleChecked && rootDepth >= 10 && std::abs(bestValue) < 1800
+                && elapsedTime < mainThread->tm.maximum())
+            {
+                troubleChecked = true;
+                if (pv_in_trouble(bestValue) && !threads.stop)
+                {
+                    troubleTime = 1.4;
+                    stopNow     = elapsedTime
+                            > std::min(totalTime * troubleTime, double(mainThread->tm.maximum()));
+                }
+            }
+
+            if (stopNow || rootMoves[multiPV - 1].score >= mate_in(3)
+                || rootMoves[0].score == mated_in(2))
             {
                 // If we are allowed to ponder do not stop the search now but
                 // keep pondering until the GUI sends "ponderhit" or "stop".
@@ -707,6 +724,80 @@ void Search::Worker::undo_move(Position& pos, const Move move) {
 }
 
 void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
+
+
+// Null-window search of the position after the first plies moves of the PV, at the given depth, against
+// threshold (from the root side's point of view). Returns the bound found, from the root side's point of
+// view, or VALUE_NONE if the PV is too short.
+Value Search::Worker::probe_pv(int plies, Depth depth, Value threshold) {
+
+    const auto& pv = rootMoves[0].pv;
+    if (int(pv.size()) <= plies)
+        return VALUE_NONE;
+
+    Stack  stack[MAX_PLY + 10] = {};
+    Stack* ss                  = stack + 7;
+    for (int i = 7; i > 0; --i)
+    {
+        (ss - i)->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
+        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+        (ss - i)->staticEval                    = VALUE_NONE;
+    }
+    for (int i = 0; i <= MAX_PLY + 2; ++i)
+        (ss + i)->ply = i;
+
+    StateInfo st[MAX_PLY];
+    int       done = 0;
+    for (; done < plies; ++done)
+    {
+        const Move m = pv[done];
+        if (!MoveList<ALL>(rootPos).contains(m))
+            break;
+        (ss + done)->inCheck = bool(rootPos.checkers());
+        do_move(rootPos, m, st[done], rootPos.gives_check(m), rootPos.capture_stage(m), ss + done);
+    }
+
+    Value v = VALUE_NONE;
+    if (done == plies)
+    {
+        // A PV node at the top, so that the probe searches rather than returning the TT entry the
+        // iteration just stored
+        PVMoves pvBuf;
+        (ss + plies)->pv = &pvBuf;
+        const Value t    = plies % 2 ? -threshold : threshold;
+        v                = search<PV>(rootPos, ss + plies, t - 1, t, depth, false);
+        v                = plies % 2 ? -v : v;
+    }
+
+    while (done--)
+        undo_move(rootPos, pv[done]);
+
+    return v;
+}
+
+// The PV is in trouble if a search from a position near its end, two plies deeper than the iteration
+// reached there, falls short of the root score by a margin, and the same check from a position closer to
+// the root confirms it.
+bool Search::Worker::pv_in_trouble(Value score) {
+
+    const Value threshold = score - 150;  // about 50 cp
+
+    for (int start : {8, 6})
+    {
+        Value v = probe_pv(start, rootDepth - start + 2, threshold);
+        if (v == VALUE_NONE || threads.stop || v >= threshold)
+            continue;
+
+        bool confirmed = true;
+        for (int ply = start - 2; ply >= 4 && confirmed; ply -= 2)
+        {
+            v         = probe_pv(ply, rootDepth - ply + 2, threshold);
+            confirmed = v != VALUE_NONE && !threads.stop && v < threshold;
+        }
+        return confirmed;
+    }
+    return false;
+}
 
 
 // Reset histories, usually before a new game
