@@ -248,6 +248,27 @@ ExtMove* MovePicker::generate_and_score() {
             int v = 20 * (bool(threatByLesser[pt] & from) - bool(threatByLesser[pt] & to));
             value += PieceValue[pt] * v;
 
+            // bonus for safely attacking more valuable pieces, more for a fork
+            if (pt != KING && !(threatByLesser[pt] & to))
+            {
+                const Bitboard targets = pt == PAWN   ? pos.pieces(~us) & ~pos.pieces(PAWN, KING)
+                                       : pt <= BISHOP ? pos.pieces(~us, ROOK, QUEEN)
+                                       : pt == ROOK   ? pos.pieces(~us, QUEEN)
+                                                      : Bitboard(0);
+                if (targets)
+                {
+                    const Bitboard after =
+                      pt == PAWN ? Attacks::attacks_bb(PAWN, to, us)
+                                 : Attacks::attacks_bb(pt, to, (pos.pieces() ^ from) | to);
+                    const Bitboard before = pt == PAWN
+                                            ? Attacks::attacks_bb(PAWN, from, us)
+                                            : Attacks::attacks_bb(pt, from, pos.pieces());
+                    const Bitboard hit    = targets & after & ~before;
+                    if (hit)
+                        value += more_than_one(hit) ? 16000 : 8000;
+                }
+            }
+
             if (lph)
                 value += 8 * (*lph)[m.raw()] / (1 + ply);
 
