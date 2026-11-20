@@ -1754,6 +1754,15 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     {
         const auto correctionValue = correction_value(*this, pos, ss);
 
+        // On PV lines after a quiet move, the parent's evaluation is a second estimate of
+        // this position's value, so blend the stand pat toward it
+        const bool blendParent = (PvNode || pvHit) && !pos.captured_piece()
+                              && ((ss - 1)->currentMove).is_ok() && !(ss - 1)->inCheck
+                              && is_valid((ss - 1)->staticEval);
+        auto standPat = [&](Value v) {
+            return blendParent ? v + (-(ss - 1)->staticEval - v) * 410 / 1024 : v;
+        };
+
         if (ss->ttHit)
         {
             // Never assume anything about values stored in TT
@@ -1762,8 +1771,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             if (!is_valid(unadjustedStaticEval))
                 unadjustedStaticEval = evaluate(pos);
 
-            ss->staticEval = bestValue =
-              to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+            ss->staticEval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+            bestValue      = standPat(ss->staticEval);
 
             // ttValue can be used as a better position evaluation
             if (is_valid(ttData.value) && !is_decisive(ttData.value)
@@ -1773,8 +1782,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         else
         {
             unadjustedStaticEval = evaluate(pos);
-            ss->staticEval       = bestValue =
-              to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+            ss->staticEval       = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+            bestValue            = standPat(ss->staticEval);
         }
 
         // Stand pat. Return immediately if static value is at least beta
