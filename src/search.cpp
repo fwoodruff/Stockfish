@@ -119,8 +119,15 @@ Value to_corrected_static_eval(const Value v, const int cv) {
 void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
-                               const int       bonus) {
+                               int             bonus) {
     const Move m = (ss - 1)->currentMove;
+
+    // After a capture, a large disagreement between the parent's and this node's
+    // static evaluation signals an error worth learning faster
+    if (pos.captured_piece() && !(ss - 1)->inCheck && is_valid((ss - 1)->staticEval))
+        bonus = bonus
+              * std::min(3072, 1024 + 1024 * std::abs(ss->staticEval + (ss - 1)->staticEval) / 437)
+              / 1024;
 
     constexpr int nonPawnWeight = 186;
     auto&         shared        = workerThread.sharedHistory;
