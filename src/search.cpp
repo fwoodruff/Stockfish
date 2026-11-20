@@ -845,6 +845,12 @@ Value Search::Worker::search(
     // Step 5. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
 
+    // Off the PV, weigh the correction history more the further the path to this node has been
+    // reduced below the iteration's depth
+    const int pathDeficit = std::clamp(rootDepth - ss->ply - depth, 0, 8);
+    const int nodeCorrection =
+      int(int64_t(correctionValue) * (1024 + 40 * !ss->ttPv * pathDeficit) / 1024);
+
     // Skip early pruning when in check
     if (ss->inCheck)
         ss->staticEval = eval = (ss - 2)->staticEval;
@@ -857,7 +863,7 @@ Value Search::Worker::search(
         if (!is_valid(unadjustedStaticEval))
             unadjustedStaticEval = evaluate(pos);
 
-        ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+        ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, nodeCorrection);
 
         // ttValue can be used as a better position evaluation
         if (is_valid(ttData.value)
@@ -867,7 +873,7 @@ Value Search::Worker::search(
     else
     {
         unadjustedStaticEval = evaluate(pos);
-        ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+        ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, nodeCorrection);
 
         // Static evaluation is saved as it was before adjustment by correction history
         ttWriter.write(posKey, VALUE_NONE, ss->ttPv, BOUND_NONE, DEPTH_UNSEARCHED, Move::none(),
