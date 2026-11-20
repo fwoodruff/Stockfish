@@ -306,6 +306,7 @@ bool Search::Worker::iterative_deepening() {
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
         (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
         (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->rawEval                       = VALUE_NONE;
     }
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
@@ -845,9 +846,31 @@ Value Search::Worker::search(
     // Step 5. Static evaluation of the position
     Value unadjustedStaticEval = VALUE_NONE;
 
+    // After a quiet move, trust the correction history more when the corrections make the
+    // evaluation more consistent with the parent's, and less when the raw evaluation barely changed
+    auto corrected_eval = [&](Value v) {
+        ss->rawEval       = v;
+        ss->rawCorrection = correctionValue / 131072;
+        int64_t cv        = correctionValue;
+        if (!priorCapture && ((ss - 1)->currentMove).is_ok() && is_valid((ss - 1)->rawEval))
+        {
+            const int r = (ss - 1)->rawEval + v;                        // raw jump
+            const int c = (ss - 1)->rawCorrection + ss->rawCorrection;  // corrections' difference
+            const int scale = std::abs(r) < 30 ? 590
+                            : std::abs(c) < 10 ? 944
+                            : c * r < 0        ? 1254
+                                               : 857;
+            cv              = cv * scale / 1024;
+        }
+        return to_corrected_static_eval(v, int(cv));
+    };
+
     // Skip early pruning when in check
     if (ss->inCheck)
+    {
+        ss->rawEval    = VALUE_NONE;
         ss->staticEval = eval = (ss - 2)->staticEval;
+    }
     else if (excludedMove)
         unadjustedStaticEval = eval = ss->staticEval;
     else if (ss->ttHit)
@@ -857,7 +880,7 @@ Value Search::Worker::search(
         if (!is_valid(unadjustedStaticEval))
             unadjustedStaticEval = evaluate(pos);
 
-        ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+        ss->staticEval = eval = corrected_eval(unadjustedStaticEval);
 
         // ttValue can be used as a better position evaluation
         if (is_valid(ttData.value)
@@ -867,7 +890,7 @@ Value Search::Worker::search(
     else
     {
         unadjustedStaticEval = evaluate(pos);
-        ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+        ss->staticEval = eval = corrected_eval(unadjustedStaticEval);
 
         // Static evaluation is saved as it was before adjustment by correction history
         ttWriter.write(posKey, VALUE_NONE, ss->ttPv, BOUND_NONE, DEPTH_UNSEARCHED, Move::none(),

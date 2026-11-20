@@ -121,6 +121,8 @@ struct Stack {
     Move                        currentMove;
     Move                        excludedMove;
     Value                       staticEval;
+    Value                       rawEval;
+    int                         rawCorrection;
     int                         statScore;
     int                         moveCount;
     bool                        inCheck;
