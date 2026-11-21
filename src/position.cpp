@@ -640,10 +640,9 @@ void Position::compute_threats() const {
 // The function is only used when a new position is set up
 void Position::set_state() const {
 
-    st->key               = sideToMove;
-    st->minorPieceKey     = 0ULL;
-    st->nonPawnKey[WHITE] = st->nonPawnKey[BLACK] = 0ULL;
-    st->pawnKey                                   = 0ULL;
+    st->key     = sideToMove;
+    st->pawnKey = 0ULL;
+    std::fill(std::begin(st->planeKey), std::end(st->planeKey), 0ULL);
     st->nonPawnMaterial[WHITE] = st->nonPawnMaterial[BLACK] = VALUE_ZERO;
     st->checkersBB = attackers_to(square<KING>(sideToMove)) & pieces(~sideToMove);
 
@@ -654,22 +653,13 @@ void Position::set_state() const {
         Square s  = pop_lsb(b);
         Piece  pc = piece_on(s);
         st->key ^= Zobrist::psq[pc][s];
+        st->planeKey[plane_of(pc)] ^= Zobrist::psq[pc][s];
 
         if (type_of(pc) == PAWN)
             st->pawnKey ^= Zobrist::psq[pc][s];
 
-        else
-        {
-            st->nonPawnKey[color_of(pc)] ^= Zobrist::psq[pc][s];
-
-            if (type_of(pc) != KING)
-            {
-                st->nonPawnMaterial[color_of(pc)] += PieceValue[pc];
-
-                if (type_of(pc) <= BISHOP)
-                    st->minorPieceKey ^= Zobrist::psq[pc][s];
-            }
-        }
+        else if (type_of(pc) != KING)
+            st->nonPawnMaterial[color_of(pc)] += PieceValue[pc];
     }
 
     if (st->epSquare != SQ_NONE)
@@ -975,7 +965,8 @@ void Position::do_move(Move m, bool givesCheck, Dirties& dirties, const SharedHi
         do_castling<true>(us, from, to, rfrom, rto, &dts, &dp);
 
         k ^= Zobrist::psq[captured][rfrom] ^ Zobrist::psq[captured][rto];
-        st->nonPawnKey[us] ^= Zobrist::psq[captured][rfrom] ^ Zobrist::psq[captured][rto];
+        st->planeKey[plane_of(captured)] ^=
+          Zobrist::psq[captured][rfrom] ^ Zobrist::psq[captured][rto];
         captured = NO_PIECE;
     }
     else if (captured)
@@ -1003,13 +994,9 @@ void Position::do_move(Move m, bool givesCheck, Dirties& dirties, const SharedHi
             st->pawnKey ^= Zobrist::psq[captured][capsq];
         }
         else
-        {
             st->nonPawnMaterial[them] -= PieceValue[captured];
-            st->nonPawnKey[them] ^= Zobrist::psq[captured][capsq];
 
-            if (type_of(captured) <= BISHOP)
-                st->minorPieceKey ^= Zobrist::psq[captured][capsq];
-        }
+        st->planeKey[plane_of(captured)] ^= Zobrist::psq[captured][capsq];
 
         dp.remove_pc = captured;
         dp.remove_sq = capsq;
@@ -1084,10 +1071,7 @@ void Position::do_move(Move m, bool givesCheck, Dirties& dirties, const SharedHi
             k ^= Zobrist::psq[promotion][to];
             st->materialKey ^= Zobrist::psq[promotion][8 + pieceCount[promotion]]
                              ^ Zobrist::psq[pc][8 + pieceCount[pc] - 1];
-            st->nonPawnKey[us] ^= Zobrist::psq[promotion][to];
-
-            if (pt <= BISHOP)
-                st->minorPieceKey ^= Zobrist::psq[promotion][to];
+            st->planeKey[plane_of(promotion)] ^= Zobrist::psq[promotion][to];
 
             // Update material
             st->nonPawnMaterial[us] += PieceValue[promotion];
@@ -1095,18 +1079,14 @@ void Position::do_move(Move m, bool givesCheck, Dirties& dirties, const SharedHi
 
         // Update pawn hash key
         st->pawnKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
+        st->planeKey[plane_of(pc)] ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
 
         // Reset rule 50 draw counter
         st->rule50 = 0;
     }
 
     else
-    {
-        st->nonPawnKey[us] ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
-
-        if (type_of(pc) <= BISHOP)
-            st->minorPieceKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
-    }
+        st->planeKey[plane_of(pc)] ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
 
     // Update the key with the final value
     st->key = k;
@@ -1114,10 +1094,6 @@ void Position::do_move(Move m, bool givesCheck, Dirties& dirties, const SharedHi
     if (history)
     {
         prefetch(&history->pawn_entry(*this)[pc][to]);
-        prefetch(&history->pawn_correction_entry(*this));
-        prefetch(&history->minor_piece_correction_entry(*this));
-        prefetch(&history->nonpawn_correction_entry<WHITE>(*this));
-        prefetch(&history->nonpawn_correction_entry<BLACK>(*this));
     }
 
     // Move the piece. The tricky Chess960 castling is handled earlier

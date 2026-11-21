@@ -404,6 +404,9 @@ constexpr Color color_of(Piece pc) {
     return Color(pc >> 3);
 }
 
+// Index of the piece plane (colour x piece type) of a piece, 0..11
+constexpr int plane_of(Piece pc) { return color_of(pc) * 6 + type_of(pc) - 1; }
+
 constexpr bool is_ok(Square s) { return s <= SQ_H8; }
 
 constexpr File file_of(Square s) { return File(s & 7); }

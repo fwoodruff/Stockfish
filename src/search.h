@@ -31,6 +31,7 @@
 #include <vector>
 #include <cstring>
 
+#include "correction.h"
 #include "history.h"
 #include "misc.h"
 #include "nnue/nnue_accumulator.h"
@@ -114,22 +115,24 @@ struct PVMoves {
 // shallower and deeper in the tree during the search. Each search thread has
 // its own array of Stack objects, indexed by the current ply.
 struct Stack {
-    PVMoves*                    pv;
-    PieceToHistory*             continuationHistory;
-    CorrectionHistory<PieceTo>* continuationCorrectionHistory;
-    int                         ply;
-    Move                        currentMove;
-    Move                        excludedMove;
-    Value                       staticEval;
-    int                         statScore;
-    int                         moveCount;
-    bool                        inCheck;
-    bool                        ttPv;
-    bool                        ttHit;
-    bool                        followPV;
-    int                         cutoffCnt;
-    int                         reduction;
-    int                         priorNMPFailHigh;
+    PVMoves*        pv;
+    PieceToHistory* continuationHistory;
+    u64             moveHash;  // hash of the move made from this node, for the correction keys
+    u32             correctionGen;
+    u32             correctionIdx[CorrectionKeys::MaxActive];
+    int             ply;
+    Move            currentMove;
+    Move            excludedMove;
+    Value           staticEval;
+    int             statScore;
+    int             moveCount;
+    bool            inCheck;
+    bool            ttPv;
+    bool            ttHit;
+    bool            followPV;
+    int             cutoffCnt;
+    int             reduction;
+    int             priorNMPFailHigh;
 };
 
 
@@ -331,8 +334,8 @@ class Worker {
     ButterflyHistory mainHistory;
     LowPlyHistory    lowPlyHistory;
 
-    CapturePieceToHistory           captureHistory;
-    CorrectionHistory<Continuation> continuationCorrectionHistory;
+    CapturePieceToHistory captureHistory;
+    CorrectionKeys        correctionKeys;
 
     TTMoveHistory    ttMoveHistory;
     SharedHistories& sharedHistory;

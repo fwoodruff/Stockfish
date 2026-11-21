@@ -91,22 +91,20 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
-int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
-    const auto  m      = (ss - 1)->currentMove;
-    const auto& shared = w.sharedHistory;
-    const int   pcv    = shared.pawn_correction_entry(pos).pawn;
-    const int   micv   = shared.minor_piece_correction_entry(pos).minor;
-    const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite;
-    const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack;
-    const int   cntcv =
-      m.is_ok()
-          ? 7885
-              * ((*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                 + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()])
-            + 6307 * (*(ss - 6)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-          : 80695;
+// Table indices of the active correction keys at this node, cached on the stack
+void prepare_correction(Worker& w, const Position& pos, Stack* const ss) {
+    u64 moveHashes[CorrectionKeys::MaxLag];
+    for (int j = 0; j < CorrectionKeys::MaxLag; ++j)
+        moveHashes[j] = (ss - 1 - j)->moveHash;
+    w.correctionKeys.indices(pos, moveHashes, ss->correctionIdx);
+    w.correctionKeys.prefetch_entries(ss->correctionIdx, w.correctionKeys.active_count());
+    ss->correctionGen = w.correctionKeys.gen();
+}
 
-    return 13806 * pcv + 9512 * micv + 11615 * (wnpcv + bnpcv) + cntcv;
+int correction_value(Worker& w, const Position& pos, Stack* const ss) {
+    if (ss->correctionGen != w.correctionKeys.gen())
+        prepare_correction(w, pos, ss);
+    return w.correctionKeys.value(ss->correctionIdx);
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -115,28 +113,19 @@ Value to_corrected_static_eval(const Value v, const int cv) {
     return std::clamp(v + cv / 131072, VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
 }
 
+// delta: searched value - corrected static evaluation; rate: 0..1024, more for deeper searches
 void update_correction_history(const Position& pos,
                                Stack* const    ss,
-                               Search::Worker& workerThread,
-                               const int       bonus) {
-    const Move m = (ss - 1)->currentMove;
-
-    constexpr int nonPawnWeight = 186;
-    auto&         shared        = workerThread.sharedHistory;
-
-    shared.pawn_correction_entry(pos).pawn << bonus;
-    shared.minor_piece_correction_entry(pos).minor << bonus * 150 / 128;
-    shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite << bonus * nonPawnWeight / 128;
-    shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack << bonus * nonPawnWeight / 128;
-
-    if (m.is_ok())
-    {
-        const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 130 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 70 / 128;
-        (*(ss - 6)->continuationCorrectionHistory)[pc][to] << bonus * 35 / 128;
-    }
+                               Worker&         w,
+                               const int       bonus,
+                               const int       delta,
+                               const int       rate) {
+    if (ss->correctionGen != w.correctionKeys.gen())
+        prepare_correction(w, pos, ss);
+    u64 moveHashes[CorrectionKeys::MaxLag];
+    for (int j = 0; j < CorrectionKeys::MaxLag; ++j)
+        moveHashes[j] = (ss - 1 - j)->moveHash;
+    w.correctionKeys.update(pos, moveHashes, ss->correctionIdx, delta, bonus, rate);
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -301,8 +290,8 @@ bool Search::Worker::iterative_deepening() {
     {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
-        (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->moveHash   = CorrectionKeys::move_hash(0);
+        (ss - i)->staticEval = VALUE_NONE;
     }
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
@@ -665,19 +654,8 @@ bool Search::Worker::iterative_deepening() {
 void Search::Worker::do_move(
   Position& pos, const Move move, const bool givesCheck, const bool capture, Stack* const ss) {
     // prefetch_key() does not model castling, en passant or promotion exactly.
-    // The correction-history prefetches also approximate castling and promotion.
-    // For these rare moves the prefetches land on unused lines.
+    // For these rare moves the prefetch lands on an unused line.
     prefetch(tt.get_cluster(pos.prefetch_key(move)));
-
-    if (ss != nullptr)
-    {
-        const Piece  pc = pos.moved_piece(move);
-        const Square to = move.to_sq();
-
-        prefetch(&(*(ss - 1)->continuationCorrectionHistory)[pc][to]);
-        prefetch(&(*(ss - 3)->continuationCorrectionHistory)[pc][to]);
-        prefetch(&(*(ss - 5)->continuationCorrectionHistory)[pc][to]);
-    }
 
     ++nodes;
 
@@ -690,16 +668,17 @@ void Search::Worker::do_move(
         ss->currentMove  = move;
         ss->continuationHistory =
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
-        ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        ss->moveHash = CorrectionKeys::move_hash(int(dirtyPiece.pc) * 64 + int(move.to_sq()));
+        prepare_correction(*this, pos, ss + 1);
     }
 }
 
 void Search::Worker::do_null_move(Position& pos, Stack* const ss) {
     pos.do_null_move();
-    ss->currentMove                   = Move::null();
-    ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->currentMove         = Move::null();
+    ss->continuationHistory = &continuationHistory[0][0][NO_PIECE][0];
+    ss->moveHash            = CorrectionKeys::move_hash(0);
+    prepare_correction(*this, pos, ss + 1);
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -717,7 +696,6 @@ void Search::Worker::clear() {
 
     // Each thread clears its part of the dynamically-sized shared histories.
     // The constant-size continuation history is initialized by thread 0 of each NUMA node.
-    sharedHistory.correctionHistory.clear_range(-5, numaThreadIdx, numaTotal);
     sharedHistory.pawnHistory.clear_range(-1338, numaThreadIdx, numaTotal);
 
     if (numaThreadIdx == 0)
@@ -729,9 +707,7 @@ void Search::Worker::clear() {
 
     ttMoveHistory = 0;
 
-    for (auto& to : continuationCorrectionHistory)
-        for (auto& h : to)
-            h.fill(5);
+    correctionKeys.clear();
 
     refreshTable.clear(network[numaAccessToken]);
 }
@@ -1312,7 +1288,7 @@ moves_loop:  // When in check, search starts here
                     const int bonus =
                       std::clamp(int(value - ss->staticEval) * 664 / 1024,
                                  -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-                    update_correction_history(pos, ss, *this, bonus);
+                    update_correction_history(pos, ss, *this, bonus, value - ss->staticEval, 512);
                 }
 
                 return value;
@@ -1664,7 +1640,8 @@ moves_loop:  // When in check, search starts here
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 18) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-        update_correction_history(pos, ss, *this, 1061 * bonus / 1024);
+        update_correction_history(pos, ss, *this, 1061 * bonus / 1024, bestValue - ss->staticEval,
+                                  std::min(int(depth), 8) * 128);
     }
 
     // The search is now complete
