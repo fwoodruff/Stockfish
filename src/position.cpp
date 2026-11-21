@@ -643,7 +643,8 @@ void Position::set_state() const {
     st->key               = sideToMove;
     st->minorPieceKey     = 0ULL;
     st->nonPawnKey[WHITE] = st->nonPawnKey[BLACK] = 0ULL;
-    st->pawnKey                                   = 0ULL;
+    st->armyKey[WHITE] = st->armyKey[BLACK] = 0ULL;
+    st->pawnKey                             = 0ULL;
     st->nonPawnMaterial[WHITE] = st->nonPawnMaterial[BLACK] = VALUE_ZERO;
     st->checkersBB = attackers_to(square<KING>(sideToMove)) & pieces(~sideToMove);
 
@@ -654,6 +655,7 @@ void Position::set_state() const {
         Square s  = pop_lsb(b);
         Piece  pc = piece_on(s);
         st->key ^= Zobrist::psq[pc][s];
+        st->armyKey[color_of(pc)] ^= Zobrist::psq[pc][s];
 
         if (type_of(pc) == PAWN)
             st->pawnKey ^= Zobrist::psq[pc][s];
@@ -976,6 +978,7 @@ void Position::do_move(Move m, bool givesCheck, Dirties& dirties, const SharedHi
 
         k ^= Zobrist::psq[captured][rfrom] ^ Zobrist::psq[captured][rto];
         st->nonPawnKey[us] ^= Zobrist::psq[captured][rfrom] ^ Zobrist::psq[captured][rto];
+        st->armyKey[us] ^= Zobrist::psq[captured][rfrom] ^ Zobrist::psq[captured][rto];
         captured = NO_PIECE;
     }
     else if (captured)
@@ -1010,6 +1013,8 @@ void Position::do_move(Move m, bool givesCheck, Dirties& dirties, const SharedHi
             if (type_of(captured) <= BISHOP)
                 st->minorPieceKey ^= Zobrist::psq[captured][capsq];
         }
+
+        st->armyKey[them] ^= Zobrist::psq[captured][capsq];
 
         dp.remove_pc = captured;
         dp.remove_sq = capsq;
@@ -1085,6 +1090,7 @@ void Position::do_move(Move m, bool givesCheck, Dirties& dirties, const SharedHi
             st->materialKey ^= Zobrist::psq[promotion][8 + pieceCount[promotion]]
                              ^ Zobrist::psq[pc][8 + pieceCount[pc] - 1];
             st->nonPawnKey[us] ^= Zobrist::psq[promotion][to];
+            st->armyKey[us] ^= Zobrist::psq[promotion][to];
 
             if (pt <= BISHOP)
                 st->minorPieceKey ^= Zobrist::psq[promotion][to];
@@ -1108,6 +1114,9 @@ void Position::do_move(Move m, bool givesCheck, Dirties& dirties, const SharedHi
             st->minorPieceKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
     }
 
+    // Zobrist::psq[pc][to] is zero for a promoting pawn
+    st->armyKey[us] ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
+
     // Update the key with the final value
     st->key = k;
 
@@ -1118,6 +1127,8 @@ void Position::do_move(Move m, bool givesCheck, Dirties& dirties, const SharedHi
         prefetch(&history->minor_piece_correction_entry(*this));
         prefetch(&history->nonpawn_correction_entry<WHITE>(*this));
         prefetch(&history->nonpawn_correction_entry<BLACK>(*this));
+        prefetch(&history->army_correction_entry<WHITE>(*this));
+        prefetch(&history->army_correction_entry<BLACK>(*this));
     }
 
     // Move the piece. The tricky Chess960 castling is handled earlier

@@ -91,6 +91,13 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
+// Hash of the last three moves, for the correction history keyed by them
+Key last_moves_key(const Position& pos, const Stack* const ss) {
+    return (u64((ss - 1)->moveKey) + 1) * 0x9E3779B97F4A7C15ull
+         ^ (u64((ss - 2)->moveKey) + 1) * 0xC2B2AE3D27D4EB4Full
+         ^ (u64((ss - 3)->moveKey) + 1) * 0x165667B19E3779F9ull ^ pos.side_to_move();
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
@@ -98,15 +105,17 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack;
+    const int   wacv   = shared.army_correction_entry<WHITE>(pos).armyWhite;
+    const int   bacv   = shared.army_correction_entry<BLACK>(pos).armyBlack;
+    const int   lmcv   = shared.last_moves_correction_entry(last_moves_key(pos, ss)).lastMoves;
     const int   cntcv =
-      m.is_ok()
-          ? 7885
-              * ((*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                 + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()])
-            + 6307 * (*(ss - 6)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-          : 80695;
+      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
+                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
+                    + (*(ss - 6)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
+                  : 0;
 
-    return 13806 * pcv + 9512 * micv + 11615 * (wnpcv + bnpcv) + cntcv;
+    // All ten tables weigh the same; the total matches the classic histories' mean correction size
+    return 8000 * (pcv + micv + wnpcv + bnpcv + wacv + bacv + lmcv + cntcv);
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -119,23 +128,24 @@ void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
                                const int       bonus) {
-    const Move m = (ss - 1)->currentMove;
-
-    constexpr int nonPawnWeight = 186;
-    auto&         shared        = workerThread.sharedHistory;
+    const Move m      = (ss - 1)->currentMove;
+    auto&      shared = workerThread.sharedHistory;
 
     shared.pawn_correction_entry(pos).pawn << bonus;
-    shared.minor_piece_correction_entry(pos).minor << bonus * 150 / 128;
-    shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite << bonus * nonPawnWeight / 128;
-    shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack << bonus * nonPawnWeight / 128;
+    shared.minor_piece_correction_entry(pos).minor << bonus;
+    shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite << bonus;
+    shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack << bonus;
+    shared.army_correction_entry<WHITE>(pos).armyWhite << bonus;
+    shared.army_correction_entry<BLACK>(pos).armyBlack << bonus;
+    shared.last_moves_correction_entry(last_moves_key(pos, ss)).lastMoves << bonus;
 
     if (m.is_ok())
     {
         const Square to = m.to_sq();
         const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 130 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 70 / 128;
-        (*(ss - 6)->continuationCorrectionHistory)[pc][to] << bonus * 35 / 128;
+        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus;
+        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus;
+        (*(ss - 6)->continuationCorrectionHistory)[pc][to] << bonus;
     }
 }
 
@@ -302,6 +312,7 @@ bool Search::Worker::iterative_deepening() {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
         (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+        (ss - i)->moveKey                       = 0;
         (ss - i)->staticEval                    = VALUE_NONE;
     }
 
@@ -692,6 +703,8 @@ void Search::Worker::do_move(
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
         ss->continuationCorrectionHistory =
           &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        ss->moveKey = int(dirtyPiece.pc) * 64 + int(move.to_sq());
+        prefetch(&sharedHistory.last_moves_correction_entry(last_moves_key(pos, ss + 1)));
     }
 }
 
@@ -700,6 +713,7 @@ void Search::Worker::do_null_move(Position& pos, Stack* const ss) {
     ss->currentMove                   = Move::null();
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
     ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->moveKey                       = 0;
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
