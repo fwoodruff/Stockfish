@@ -95,8 +95,9 @@ const std::array<int, MAX_MOVES> reductions = [] {
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
+    const bool  minors = pos.pieces(KNIGHT, BISHOP);  // else the minor piece key is uninformative
     const int   pcv    = shared.pawn_correction_entry(pos).pawn;
-    const int   micv   = shared.minor_piece_correction_entry(pos).minor;
+    const int   micv   = minors ? int(shared.minor_piece_correction_entry(pos).minor) : 0;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack;
     const int   cntcv =
@@ -126,7 +127,8 @@ void update_correction_history(const Position& pos,
     auto&         shared        = workerThread.sharedHistory;
 
     shared.pawn_correction_entry(pos).pawn << bonus;
-    shared.minor_piece_correction_entry(pos).minor << bonus * 150 / 128;
+    if (pos.pieces(KNIGHT, BISHOP))
+        shared.minor_piece_correction_entry(pos).minor << bonus * 150 / 128;
     shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack << bonus * nonPawnWeight / 128;
 
