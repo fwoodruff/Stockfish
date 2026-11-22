@@ -156,13 +156,13 @@ enum CorrHistType {
 template<typename T, int D>
 struct CorrectionBundle {
     StatsEntry<T, D, true> pawn;
-    StatsEntry<T, D, true> minor;
+    StatsEntry<T, D, true> lastMoves;
     StatsEntry<T, D, true> nonPawnWhite;
     StatsEntry<T, D, true> nonPawnBlack;
 
     void fill(T val) {
         pawn         = val;
-        minor        = val;
+        lastMoves    = val;
         nonPawnWhite = val;
         nonPawnBlack = val;
     }
@@ -229,11 +229,9 @@ struct SharedHistories {
         return correctionHistory[pos.pawn_key() & sizeMinus1];
     }
 
-    auto& minor_piece_correction_entry(const Position& pos) {
-        return correctionHistory[pos.minor_piece_key() & sizeMinus1];
-    }
-    const auto& minor_piece_correction_entry(const Position& pos) const {
-        return correctionHistory[pos.minor_piece_key() & sizeMinus1];
+    auto&       last_moves_correction_entry(Key k) { return correctionHistory[k & sizeMinus1]; }
+    const auto& last_moves_correction_entry(Key k) const {
+        return correctionHistory[k & sizeMinus1];
     }
 
     template<Color c>

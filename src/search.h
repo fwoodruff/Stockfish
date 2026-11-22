@@ -117,6 +117,7 @@ struct Stack {
     PVMoves*                    pv;
     PieceToHistory*             continuationHistory;
     CorrectionHistory<PieceTo>* continuationCorrectionHistory;
+    int                         moveKey;  // moved piece * 64 + to square
     int                         ply;
     Move                        currentMove;
     Move                        excludedMove;
