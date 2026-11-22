@@ -140,6 +140,9 @@ void update_correction_history(const Position& pos,
     }
 }
 
+// Target rate of wrong reverse futility prunes close to the threshold (/1024)
+constexpr int RfpTarget = 102;  // master's rate near the threshold, measured in self-play
+
 // Add a small random component to draw evaluations to avoid 3-fold blindness
 Value value_draw(usize nodes) { return VALUE_DRAW - 1 + Value(nodes & 0x2); }
 Value value_to_tt(Value v, int ply);
@@ -723,6 +726,8 @@ void Search::Worker::clear() {
                         h.fill(-586);
 
     ttMoveHistory = 0;
+    rfpOffset     = 0;
+    rfpSamples    = 0;
 
     for (auto& to : continuationCorrectionHistory)
         for (auto& h : to)
@@ -1015,17 +1020,31 @@ Value Search::Worker::search(
     // Step 9. Futility pruning: child node
     // The depth condition is important for mate finding. It should NOT be tuned.
     if (!ss->ttPv && depth < (seekMate ? 6 : 19) && eval >= beta && (!ttData.move || ttCapture)
-        && !is_loss(beta) && !is_win(eval))
+        && !is_loss(beta) && !is_win(eval) && !ss->rfpVerify)
     {
         Value futilityMult = std::min(45 + depth * 4, 85);
         futilityMult -= 20 * !ss->ttHit;
 
         Value futilityMargin = futilityMult * depth
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
-                             + std::abs(correctionValue) / 198435;
+                             + std::abs(correctionValue) / 198435 + rfpOffset / 3072;
 
         if (eval - futilityMargin >= beta)
+        {
+            // One in 64 prunes close to the threshold is searched instead. Its result tells whether
+            // pruning was right, and the margin offset adapts to keep the rate of wrong prunes there
+            // at its target.
+            if (eval - futilityMargin - beta < 32 && ++rfpSamples % 64 == 0)
+            {
+                ss->rfpVerify = true;
+                const Value v = search<NonPV>(pos, ss, beta - 1, beta, depth, cutNode);
+                ss->rfpVerify = false;
+                rfpOffset =
+                  std::clamp(rfpOffset + (v < beta) * 1024 - RfpTarget, -64 * 3072, 64 * 3072);
+                return v;
+            }
             return (661 * beta + 363 * eval) / 1024;
+        }
     }
 
     // Step 10. Null move search with verification search

@@ -130,6 +130,7 @@ struct Stack {
     int                         cutoffCnt;
     int                         reduction;
     int                         priorNMPFailHigh;
+    bool                        rfpVerify;
 };
 
 
@@ -334,7 +335,11 @@ class Worker {
     CapturePieceToHistory           captureHistory;
     CorrectionHistory<Continuation> continuationCorrectionHistory;
 
-    TTMoveHistory    ttMoveHistory;
+    TTMoveHistory ttMoveHistory;
+
+    // Reverse futility pruning margin offset, adapted online (1/3072 units), and its sampling counter
+    int              rfpOffset  = 0;
+    int              rfpSamples = 0;
     SharedHistories& sharedHistory;
     ContinuationHistory (&continuationHistory)[2][2];
 
