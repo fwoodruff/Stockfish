@@ -95,8 +95,9 @@ const std::array<int, MAX_MOVES> reductions = [] {
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
+    const int   minors = popcount(pos.pieces(KNIGHT, BISHOP));
     const int   pcv    = shared.pawn_correction_entry(pos).pawn;
-    const int   micv   = shared.minor_piece_correction_entry(pos).minor;
+    const int   micv   = minors > 2 ? int(shared.minor_piece_correction_entry(pos).minor) : 0;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack;
     const int   cntcv =
@@ -107,7 +108,12 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
             + 6307 * (*(ss - 6)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
           : 80695;
 
-    return 13806 * pcv + 9512 * micv + 11615 * (wnpcv + bnpcv) + cntcv;
+    const int cv = 13806 * pcv + 9512 * micv + 11615 * (wnpcv + bnpcv) + cntcv;
+
+    // With at most two minor pieces the minor piece key adds little: it is skipped, and the
+    // other terms are scaled to keep the mean correction size
+    constexpr int FewMinorsScale[] = {1342, 1331, 1260};
+    return minors > 2 ? cv : int(i64(cv) * FewMinorsScale[minors] / 1024);
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -126,7 +132,8 @@ void update_correction_history(const Position& pos,
     auto&         shared        = workerThread.sharedHistory;
 
     shared.pawn_correction_entry(pos).pawn << bonus;
-    shared.minor_piece_correction_entry(pos).minor << bonus * 150 / 128;
+    if (popcount(pos.pieces(KNIGHT, BISHOP)) > 2)
+        shared.minor_piece_correction_entry(pos).minor << bonus * 150 / 128;
     shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack << bonus * nonPawnWeight / 128;
 
