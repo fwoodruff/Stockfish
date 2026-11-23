@@ -223,10 +223,10 @@ struct SharedHistories {
     }
 
     auto& pawn_correction_entry(const Position& pos) {
-        return correctionHistory[pos.pawn_key() & sizeMinus1];
+        return correctionHistory[pos.pawn_correction_key() & sizeMinus1];
     }
     const auto& pawn_correction_entry(const Position& pos) const {
-        return correctionHistory[pos.pawn_key() & sizeMinus1];
+        return correctionHistory[pos.pawn_correction_key() & sizeMinus1];
     }
 
     auto& minor_piece_correction_entry(const Position& pos) {

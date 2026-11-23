@@ -146,6 +146,7 @@ class Position {
     Key prefetch_key(Move m) const;
     Key material_key() const;
     Key pawn_key() const;
+    Key pawn_correction_key() const;
     Key minor_piece_key() const;
     Key non_pawn_key(Color c) const;
 
@@ -318,6 +319,20 @@ inline Key Position::adjust_key50(Key k) const {
 }
 
 inline Key Position::pawn_key() const { return st->pawnKey ^ sideToMove; }
+
+// In closed positions (at least three blocked pawn pairs) the pawn correction
+// history is also keyed on the square colours of each side's bishops
+inline Key Position::pawn_correction_key() const {
+    if (popcount(pieces(WHITE, PAWN) & shift(pieces(BLACK, PAWN), SOUTH)) < 3)
+        return pawn_key();
+
+    constexpr Bitboard DarkSquares = 0xAA55AA55AA55AA55ULL;
+    const Bitboard     wb = pieces(WHITE, BISHOP), bb = pieces(BLACK, BISHOP);
+    const int          bishops = bool(wb & DarkSquares) + 2 * bool(wb & ~DarkSquares)
+                      + 4 * bool(bb & DarkSquares) + 8 * bool(bb & ~DarkSquares);
+
+    return pawn_key() ^ (Key(bishops) * 0x9E3779B97F4A7C15ULL);
+}
 
 inline Key Position::material_key() const { return st->materialKey; }
 
