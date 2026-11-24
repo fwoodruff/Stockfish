@@ -1379,6 +1379,10 @@ moves_loop:  // When in check, search starts here
         if (!capture && !is_decisive(alpha))
             r += 3 * std::clamp(alpha - eval, -64, 96);
 
+        // Without queens, reduce quiet piece moves more and quiet king and pawn moves less
+        if (!pos.pieces(QUEEN) && !capture)
+            r += type_of(movedPiece) == PAWN || type_of(movedPiece) == KING ? -512 : 512;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r * 276 / (256 * depth + 268);
