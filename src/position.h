@@ -146,6 +146,7 @@ class Position {
     Key prefetch_key(Move m) const;
     Key material_key() const;
     Key pawn_key() const;
+    Key closed_key() const;
     Key minor_piece_key() const;
     Key non_pawn_key(Color c) const;
 
@@ -318,6 +319,22 @@ inline Key Position::adjust_key50(Key k) const {
 }
 
 inline Key Position::pawn_key() const { return st->pawnKey ^ sideToMove; }
+
+// In closed positions (at least three blocked pawn pairs), a key on the blocked
+// pawns and the square colours of each side's bishops. Zero otherwise.
+inline Key Position::closed_key() const {
+    const Bitboard blocked = pieces(WHITE, PAWN) & shift(pieces(BLACK, PAWN), SOUTH);
+    if (popcount(blocked) < 3)
+        return 0;
+
+    constexpr Bitboard DarkSquares = 0xAA55AA55AA55AA55ULL;
+    const Bitboard     wb = pieces(WHITE, BISHOP), bb = pieces(BLACK, BISHOP);
+    Key                k = blocked | bool(wb & DarkSquares) | bool(wb & ~DarkSquares) << 1
+          | bool(bb & DarkSquares) << 2 | bool(bb & ~DarkSquares) << 3 | Key(sideToMove) << 4;
+
+    k = (k ^ (k >> 33)) * 0xFF51AFD7ED558CCDULL;
+    return k ^ (k >> 33);
+}
 
 inline Key Position::material_key() const { return st->materialKey; }
 

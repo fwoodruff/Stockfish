@@ -236,6 +236,14 @@ struct SharedHistories {
         return correctionHistory[pos.minor_piece_key() & sizeMinus1];
     }
 
+    // The closed position correction history shares the minor piece entries
+    auto& closed_correction_entry(Key closedKey) {
+        return correctionHistory[closedKey & sizeMinus1];
+    }
+    const auto& closed_correction_entry(Key closedKey) const {
+        return correctionHistory[closedKey & sizeMinus1];
+    }
+
     template<Color c>
     auto& nonpawn_correction_entry(const Position& pos) {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];

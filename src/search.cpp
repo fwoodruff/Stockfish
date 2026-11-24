@@ -99,6 +99,8 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack;
+    const Key   ck     = pos.closed_key();
+    const int   clcv   = ck ? int(shared.closed_correction_entry(ck).minor) : 0;
     const int   cntcv =
       m.is_ok()
           ? 7885
@@ -107,7 +109,7 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
             + 6307 * (*(ss - 6)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
           : 80695;
 
-    return 13806 * pcv + 9512 * micv + 11615 * (wnpcv + bnpcv) + cntcv;
+    return 13806 * pcv + 9512 * (micv + clcv) + 11615 * (wnpcv + bnpcv) + cntcv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -129,6 +131,9 @@ void update_correction_history(const Position& pos,
     shared.minor_piece_correction_entry(pos).minor << bonus * 150 / 128;
     shared.nonpawn_correction_entry<WHITE>(pos).nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos).nonPawnBlack << bonus * nonPawnWeight / 128;
+
+    if (const Key ck = pos.closed_key())
+        shared.closed_correction_entry(ck).minor << bonus * 150 / 128;
 
     if (m.is_ok())
     {
