@@ -157,6 +157,7 @@ class Position {
     bool  is_repetition(int ply) const;
     bool  upcoming_repetition(int ply) const;
     bool  has_repeated() const;
+    bool  durable_lock() const;
     int   rule50_count() const;
     Value non_pawn_material(Color c) const;
     Value non_pawn_material() const;
@@ -320,6 +321,22 @@ inline Key Position::adjust_key50(Key k) const {
 inline Key Position::pawn_key() const { return st->pawnKey ^ sideToMove; }
 
 inline Key Position::material_key() const { return st->materialKey; }
+
+// At least three blocked pawn pairs, and no pawn of either side can capture a
+// pawn now or after a single or double push
+inline bool Position::durable_lock() const {
+    const Bitboard wp = pieces(WHITE, PAWN), bp = pieces(BLACK, PAWN);
+    if (popcount(wp & shift(bp, SOUTH)) < 3)
+        return false;
+
+    const Bitboard empty = ~pieces();
+    Bitboard       wPush = shift(wp, NORTH) & empty;
+    Bitboard       bPush = shift(bp, SOUTH) & empty;
+    wPush |= shift(wPush & Rank3BB, NORTH) & empty;
+    bPush |= shift(bPush & Rank6BB, SOUTH) & empty;
+
+    return !(pawn_attacks_bb<WHITE>(wp | wPush) & bp) && !(pawn_attacks_bb<BLACK>(bp | bPush) & wp);
+}
 
 inline Key Position::minor_piece_key() const { return st->minorPieceKey ^ sideToMove; }
 

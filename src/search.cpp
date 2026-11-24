@@ -1138,6 +1138,7 @@ moves_loop:  // When in check, search starts here
       (ss - 1)->continuationHistory, (ss - 2)->continuationHistory, (ss - 3)->continuationHistory,
       (ss - 4)->continuationHistory, (ss - 5)->continuationHistory, (ss - 6)->continuationHistory};
 
+    const bool locked = pos.durable_lock();
 
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
                   &sharedHistory, ss->ply);
@@ -1378,6 +1379,10 @@ moves_loop:  // When in check, search starts here
 
         if (!capture && !is_decisive(alpha))
             r += 3 * std::clamp(alpha - eval, -64, 96);
+
+        // In durable pawn locks, reduce piece moves more and pawn moves less
+        if (locked && !capture)
+            r += type_of(movedPiece) == PAWN ? -512 : 512;
 
         // Scale up reductions for expected ALL nodes
         if (allNode)
