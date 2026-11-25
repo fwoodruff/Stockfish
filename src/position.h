@@ -121,6 +121,7 @@ class Position {
     void     update_slider_blockers(Color c) const;
     Bitboard xattacks_by(PieceType pt, Color c, Bitboard occupied) const;
     Bitboard threats_by(PieceType pt) const;
+    Bitboard locked_outposts() const;
 
     // Properties of moves
     bool  legal(Move m) const;
@@ -129,6 +130,7 @@ class Position {
     bool  gives_check(Move m) const;
     Piece moved_piece(Move m) const;
     Piece captured_piece() const;
+    bool  is_outpost_move(Move m, Bitboard outposts) const;
 
     // Doing and undoing moves
     void do_move(Move m);
@@ -320,6 +322,81 @@ inline Key Position::adjust_key50(Key k) const {
 inline Key Position::pawn_key() const { return st->pawnKey ^ sideToMove; }
 
 inline Key Position::material_key() const { return st->materialKey; }
+
+// When at least two pawn pairs are blocked and no pawn of either side can capture a pawn now
+// or after a single or double push, returns the outposts of both sides: squares in the enemy
+// half that the side's pawns defend and no enemy pawn can ever attack. Otherwise returns 0.
+inline Bitboard Position::locked_outposts() const {
+    const Bitboard wp = pieces(WHITE, PAWN), bp = pieces(BLACK, PAWN);
+    if (popcount(wp & shift(bp, SOUTH)) < 2)
+        return 0;
+
+    const Bitboard empty = ~pieces();
+    Bitboard       wPush = shift(wp, NORTH) & empty;
+    Bitboard       bPush = shift(bp, SOUTH) & empty;
+    wPush |= shift(wPush & Rank3BB, NORTH) & empty;
+    bPush |= shift(bPush & Rank6BB, SOUTH) & empty;
+
+    if ((pawn_attacks_bb<WHITE>(wp | wPush) & bp) || (pawn_attacks_bb<BLACK>(bp | bPush) & wp))
+        return 0;
+
+    Bitboard wFill = wp, bFill = bp;
+    wFill |= wFill << 8, wFill |= wFill << 16, wFill |= wFill << 32;
+    bFill |= bFill >> 8, bFill |= bFill >> 16, bFill |= bFill >> 32;
+
+    const Bitboard white =
+      (Rank4BB | Rank5BB | Rank6BB) & pawn_attacks_bb<WHITE>(wp) & ~pawn_attacks_bb<BLACK>(bFill);
+    const Bitboard black =
+      (Rank3BB | Rank4BB | Rank5BB) & pawn_attacks_bb<BLACK>(bp) & ~pawn_attacks_bb<WHITE>(wFill);
+
+    return (white | black) & ~(wp | bp);
+}
+
+// A knight or bishop move to a square no enemy pawn attacks that heads for one of our outposts
+// or newly attacks an outpost of the opponent. A knight heads for our outposts when it gets
+// strictly closer to one, in knight moves over such squares; a bishop when it lands on one or
+// newly attacks one.
+inline bool Position::is_outpost_move(Move m, Bitboard outposts) const {
+    const PieceType pt = type_of(moved_piece(m));
+    if (pt != KNIGHT && pt != BISHOP)
+        return false;
+
+    const Square   from = m.from_sq(), to = m.to_sq();
+    const Bitboard enemyPawnAttacks = sideToMove == WHITE
+                                      ? pawn_attacks_bb<BLACK>(pieces(BLACK, PAWN))
+                                      : pawn_attacks_bb<WHITE>(pieces(WHITE, PAWN));
+    const Bitboard safe             = ~(enemyPawnAttacks | pieces(PAWN));
+    if (!(safe & to))
+        return false;
+
+    // Our outposts are out of reach of enemy pawns, the opponent's are defended by them
+    const Bitboard ours = outposts & safe, theirs = outposts & enemyPawnAttacks;
+    const Bitboard occupied = pieces() ^ from;
+    const Bitboard gained =
+      Attacks::attacks_bb(pt, to, occupied) & ~Attacks::attacks_bb(pt, from, occupied);
+
+    if (gained & theirs)
+        return true;
+
+    if (pt == BISHOP)
+        return (ours & to) || (gained & ours);
+
+    // Rings of knight distance 0 to 3 from our outposts
+    Bitboard ring = ours, seen = 0;
+    for (int d = 0; d < 4 && ring; ++d)
+    {
+        if (ring & from)
+            return false;
+        if (ring & to)
+            return true;
+        seen |= ring;
+        const Bitboard l1 = (ring >> 1) & ~FileHBB, l2 = (ring >> 2) & ~(FileGBB | FileHBB);
+        const Bitboard r1 = (ring << 1) & ~FileABB, r2 = (ring << 2) & ~(FileABB | FileBBB);
+        ring = (((l1 | r1) << 16) | ((l1 | r1) >> 16) | ((l2 | r2) << 8) | ((l2 | r2) >> 8)) & safe
+             & ~seen;
+    }
+    return false;
+}
 
 inline Key Position::minor_piece_key() const { return st->minorPieceKey ^ sideToMove; }
 
