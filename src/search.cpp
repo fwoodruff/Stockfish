@@ -1379,6 +1379,18 @@ moves_loop:  // When in check, search starts here
         if (!capture && !is_decisive(alpha))
             r += 3 * std::clamp(alpha - eval, -64, 96);
 
+        // With queens on and the kings castled on opposite wings, pawn storms carry the
+        // plans: reduce quiet pawn moves half a ply less
+        if (!capture && type_of(movedPiece) == PAWN && pos.pieces(WHITE, QUEEN)
+            && pos.pieces(BLACK, QUEEN))
+        {
+            const Square wk = pos.square<KING>(WHITE), bk = pos.square<KING>(BLACK);
+            if (rank_of(wk) == RANK_1 && rank_of(bk) == RANK_8
+                && ((file_of(wk) <= FILE_C && file_of(bk) >= FILE_F)
+                    || (file_of(bk) <= FILE_C && file_of(wk) >= FILE_F)))
+                r -= 512;
+        }
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r * 276 / (256 * depth + 268);
