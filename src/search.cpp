@@ -1139,6 +1139,8 @@ moves_loop:  // When in check, search starts here
       (ss - 4)->continuationHistory, (ss - 5)->continuationHistory, (ss - 6)->continuationHistory};
 
 
+    const Bitboard outposts = pos.locked_outposts();
+
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
                   &sharedHistory, ss->ply);
 
@@ -1378,6 +1380,16 @@ moves_loop:  // When in check, search starts here
 
         if (!capture && !is_decisive(alpha))
             r += 3 * std::clamp(alpha - eval, -64, 96);
+
+        // In pawn locks with outposts, search moves towards or covering the outposts and
+        // pawn moves deeper, and other quiet minor and rook moves shallower
+        if (outposts && !capture)
+        {
+            if (type_of(movedPiece) == PAWN || pos.is_outpost_move(move, outposts))
+                r -= 1024;
+            else if (type_of(movedPiece) != KING && type_of(movedPiece) != QUEEN)
+                r += 1024;
+        }
 
         // Scale up reductions for expected ALL nodes
         if (allNode)

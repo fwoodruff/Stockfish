@@ -202,6 +202,8 @@ ExtMove* MovePicker::generate_and_score() {
         threatByLesser[KING]  = 0;
     }
 
+    [[maybe_unused]] const Bitboard outposts = Type == QUIETS ? pos.locked_outposts() : 0;
+
     MoveList<Type> ml(pos);  // move generation
 
     const auto* mainHist = Type != CAPTURES ? &(*mainHistory)[us] : nullptr;
@@ -254,6 +256,10 @@ ExtMove* MovePicker::generate_and_score() {
             // bonus for checks
             if ((pos.check_squares(pt) & to) && pos.see_ge(m, -75))
                 value += 16384;
+
+            // bonus for moves towards outposts in pawn locks
+            if (outposts && pos.is_outpost_move(m, outposts))
+                value += 8192;
 
             m.value = value;
         }
