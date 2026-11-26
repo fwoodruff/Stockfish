@@ -92,6 +92,22 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
+// Scrutiny: borderline pruning decisions at non-PV nodes of depth ScrutinyMinDepth or more,
+// within ScrutinyBand of going the other way, weighted by closeness and roughly by subtree
+// size. At the root, a rival move's lean towards keeping, against the best move's, shifts
+// the bar it has to beat by up to ScrutinyCap, lowering it (ScrutinySign 1) or raising it
+// (ScrutinySign -1).
+constexpr int ScrutinyBand      = 16;
+constexpr int ScrutinyMinDepth  = 5;
+constexpr int ScrutinyCap       = 12;
+constexpr int ScrutinySign      = -1;
+constexpr int ScrutinyPrior     = 1024;
+constexpr int ScrutinyMinEvents = 1024;
+
+int scrutiny_weight(int distance, Depth depth) {
+    return (ScrutinyBand - distance) << std::min(depth / 2, 8);
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
@@ -325,7 +341,8 @@ bool Search::Worker::iterative_deepening() {
     if (skill.enabled())
         multiPV = std::max(multiPV, usize(4));
 
-    multiPV = std::min(multiPV, rootMoves.size());
+    multiPV      = std::min(multiPV, rootMoves.size());
+    rootScrutiny = multiPV == 1;
 
     int  searchAgainCounter = 0;
     int  failHighRecovery   = 0;
@@ -358,6 +375,8 @@ bool Search::Worker::iterative_deepening() {
             rootMoves[i].previousScore      = rootMoves[i].score;
             rootMoves[i].previousPV         = rootMoves[i].pv;
             rootMoves[i].previousScoreExact = i < multiPV;
+            rootMoves[i].frozenLean         = rootMoves[i].lean;
+            rootMoves[i].frozenEvents       = rootMoves[i].events;
         }
 
         usize pvFirst = pvLast = 0;
@@ -1015,6 +1034,11 @@ Value Search::Worker::search(
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
                              + std::abs(correctionValue) / 198435;
 
+        const int margin = std::abs(eval - futilityMargin - beta);
+        if (depth >= ScrutinyMinDepth && margin < ScrutinyBand)
+            (eval - futilityMargin >= beta ? scrutinyCut : scrutinyKeep) +=
+              scrutiny_weight(margin, depth);
+
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
     }
@@ -1320,6 +1344,27 @@ moves_loop:  // When in check, search starts here
 
         u64 nodeCount = rootNode ? u64(nodes) : 0;
 
+        // At the root, shift the bar a rival move has to beat by how far its subtree
+        // leaned towards keeping, against the best move's, both as of the previous iteration
+        Value rootBonus = 0;
+        if (rootNode && rootScrutiny && moveCount > 1 && alpha > -VALUE_INFINITE
+            && !is_decisive(alpha))
+        {
+            const RootMove& rm   = *std::find(rootMoves.begin(), rootMoves.end(), move);
+            const RootMove& best = rootMoves[0];
+            if (rm.frozenEvents >= ScrutinyMinEvents && best.frozenEvents >= ScrutinyMinEvents)
+            {
+                rootBonus = ScrutinySign
+                          * std::clamp((rm.frozenLean - best.frozenLean) * ScrutinyCap / 256, 0,
+                                       ScrutinyCap);
+                rootBonus = std::max(rootBonus, alpha + 1 - beta);
+                alpha -= rootBonus;
+            }
+        }
+
+        const i64 keepAtStart = rootNode ? scrutinyKeep : 0;
+        const i64 cutAtStart  = rootNode ? scrutinyCut : 0;
+
         // Step 17. Make the move
         do_move(pos, move, givesCheck, capture, *ss);
 
@@ -1392,6 +1437,14 @@ moves_loop:  // When in check, search starts here
             value         = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, d, true);
             ss->reduction = 0;
 
+            if (!PvNode && depth >= ScrutinyMinDepth)
+            {
+                const int distance = value > alpha ? value - alpha - 1 : alpha - value;
+                if (distance < ScrutinyBand)
+                    (value > alpha ? scrutinyKeep : scrutinyCut) +=
+                      scrutiny_weight(distance, depth);
+            }
+
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Shallower searches here don't scale well
             if (value > alpha)
@@ -1445,6 +1498,9 @@ moves_loop:  // When in check, search starts here
         // Step 21. Undo move
         undo_move(pos, move);
 
+        value += rootBonus;
+        alpha += rootBonus;
+
         assert(value > -VALUE_INFINITE && value < VALUE_INFINITE);
 
         // Step 22. Check for a new best move
@@ -1460,6 +1516,15 @@ moves_loop:  // When in check, search starts here
 
             rm.effort += nodes - nodeCount;
 
+            // Scores, statistics and time management see the move's own value; only the
+            // choice of best move uses the scrutiny shift
+            const Value rawValue      = value - rootBonus;
+            const bool  bonusPromoted = rootBonus > 0 && rawValue <= alpha;
+
+            const i64 keep = scrutinyKeep - keepAtStart, cut = scrutinyCut - cutAtStart;
+            rm.lean   = int((keep - cut) * 1024 / (keep + cut + ScrutinyPrior));
+            rm.events = keep + cut;
+
             u64 N      = nodes - nodeCount;
             u64 E_prev = std::max(u64(1), rm.effort - N);
 
@@ -1474,15 +1539,15 @@ moves_loop:  // When in check, search starts here
                                      / (N * ChiDenominator + ChiNumerator * E_prev),
                                    MinWeight, MaxWeight);
             u64 w_mss = std::min(w, u64(16));
-            i64 v2    = i64(value) * std::abs(value);
+            i64 v2    = i64(rawValue) * std::abs(rawValue);
 
             if (rm.averageScore == -VALUE_INFINITE)
-                rm.averageScore = value;
+                rm.averageScore = rawValue;
             else
-                rm.averageScore = Value((value * w + rm.averageScore * (Scale - w)) / Scale);
+                rm.averageScore = Value((rawValue * w + rm.averageScore * (Scale - w)) / Scale);
 
             if (rm.meanSquaredScore == -VALUE_INFINITE * VALUE_INFINITE)
-                rm.meanSquaredScore = value * std::abs(value);
+                rm.meanSquaredScore = rawValue * std::abs(rawValue);
             else
                 rm.meanSquaredScore =
                   Value((v2 * w_mss + int64_t(rm.meanSquaredScore) * (Scale - w_mss)) / Scale);
@@ -1490,7 +1555,8 @@ moves_loop:  // When in check, search starts here
             // PV move or new best move?
             if (moveCount == 1 || value > alpha)
             {
-                rm.score = rm.uciScore = value;
+                rm.score = rm.uciScore = rawValue;
+                rm.sortBonus           = rootBonus;
                 rm.selDepth            = selDepth;
                 rm.unset_inexact();
 
@@ -1515,14 +1581,17 @@ moves_loop:  // When in check, search starts here
                 // We record how often the best move has been changed in each iteration.
                 // This information is used for time management. In MultiPV mode,
                 // we must take care to only do this for the first PV line.
-                if (moveCount > 1 && !pvIdx)
+                if (moveCount > 1 && !pvIdx && !bonusPromoted)
                     ++bestMoveChanges;
             }
             else
+            {
                 // All other moves but the PV are set to the lowest value: this
                 // is not a problem when sorting because the sort is stable and the
                 // move position in the list is preserved -- just the PV is pushed up.
-                rm.score = -VALUE_INFINITE;
+                rm.score     = -VALUE_INFINITE;
+                rm.sortBonus = 0;
+            }
         }
 
         // If we have an alternative move equal in value to the current bestmove,
