@@ -92,6 +92,22 @@ const std::array<int, MAX_MOVES> reductions = [] {
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls.
 
+// Close calls: pruning decisions at non-PV nodes of depth DangerMinDepth or more that came
+// within DangerBand of going the other way, credited to the side to move there and weighted
+// by closeness and roughly by subtree size. At the root, a rival move whose subtree held more
+// of the opponent's close calls relative to ours than the average rival's did has the bar it
+// has to beat raised by up to DangerCap.
+constexpr int DangerBand       = 16;
+constexpr int DangerMinDepth   = 5;
+constexpr int DangerCap        = 12;
+constexpr int DangerPrior      = 1024;
+constexpr int DangerMinEvents  = 1024;
+constexpr int DangerNoBaseline = -(1 << 20);
+
+int close_call_weight(int distance, Depth depth) {
+    return (DangerBand - distance) << std::min(depth / 2, 8);
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
@@ -327,6 +343,8 @@ bool Search::Worker::iterative_deepening() {
 
     multiPV = std::min(multiPV, rootMoves.size());
 
+    rootDanger = multiPV == 1;
+
     int  searchAgainCounter = 0;
     int  failHighRecovery   = 0;
     u64  totalEffort        = 0;
@@ -358,7 +376,18 @@ bool Search::Worker::iterative_deepening() {
             rootMoves[i].previousScore      = rootMoves[i].score;
             rootMoves[i].previousPV         = rootMoves[i].pv;
             rootMoves[i].previousScoreExact = i < multiPV;
+            rootMoves[i].frozenDanger       = rootMoves[i].danger;
+            rootMoves[i].frozenEvents       = rootMoves[i].events;
         }
+
+        // The average danger of the rival moves with enough data is the baseline that
+        // each rival is compared against
+        i64 dangerSum = 0;
+        int rivals    = 0;
+        for (usize i = 1; i < rootMoves.size(); ++i)
+            if (rootMoves[i].frozenEvents >= DangerMinEvents)
+                dangerSum += rootMoves[i].frozenDanger, ++rivals;
+        dangerBaseline = rivals >= 2 ? int(dangerSum / rivals) : DangerNoBaseline;
 
         usize pvFirst = pvLast = 0;
 
@@ -1015,6 +1044,10 @@ Value Search::Worker::search(
                              - (2789 * improving + 335 * opponentWorsening) * futilityMult / 1024
                              + std::abs(correctionValue) / 198435;
 
+        const int margin = std::abs(eval - futilityMargin - beta);
+        if (depth >= DangerMinDepth && margin < DangerBand)
+            closeCalls[us] += close_call_weight(margin, depth);
+
         if (eval - futilityMargin >= beta)
             return (661 * beta + 363 * eval) / 1024;
     }
@@ -1320,6 +1353,25 @@ moves_loop:  // When in check, search starts here
 
         u64 nodeCount = rootNode ? u64(nodes) : 0;
 
+        // At the root, raise the bar for a rival move whose line looked more dangerous for
+        // us than the average rival's, both as of the previous iteration
+        Value rootBonus = 0;
+        if (rootNode && rootDanger && moveCount > 1 && alpha > -VALUE_INFINITE
+            && !is_decisive(alpha))
+        {
+            const RootMove& rm = *std::find(rootMoves.begin(), rootMoves.end(), move);
+            if (dangerBaseline != DangerNoBaseline && rm.frozenEvents >= DangerMinEvents)
+            {
+                rootBonus =
+                  -std::clamp((rm.frozenDanger - dangerBaseline) * DangerCap / 256, 0, DangerCap);
+                rootBonus = std::max(rootBonus, alpha + 1 - beta);
+                alpha -= rootBonus;
+            }
+        }
+
+        const i64 oursAtStart   = rootNode ? closeCalls[us] : 0;
+        const i64 theirsAtStart = rootNode ? closeCalls[~us] : 0;
+
         // Step 17. Make the move
         do_move(pos, move, givesCheck, capture, *ss);
 
@@ -1392,6 +1444,13 @@ moves_loop:  // When in check, search starts here
             value         = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, d, true);
             ss->reduction = 0;
 
+            if (!PvNode && depth >= DangerMinDepth)
+            {
+                const int distance = value > alpha ? value - alpha - 1 : alpha - value;
+                if (distance < DangerBand)
+                    closeCalls[us] += close_call_weight(distance, depth);
+            }
+
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Shallower searches here don't scale well
             if (value > alpha)
@@ -1445,6 +1504,9 @@ moves_loop:  // When in check, search starts here
         // Step 21. Undo move
         undo_move(pos, move);
 
+        value += rootBonus;
+        alpha += rootBonus;
+
         assert(value > -VALUE_INFINITE && value < VALUE_INFINITE);
 
         // Step 22. Check for a new best move
@@ -1460,6 +1522,16 @@ moves_loop:  // When in check, search starts here
 
             rm.effort += nodes - nodeCount;
 
+            // Scores, statistics and time management see the move's own value; only the
+            // choice of best move uses the danger shift
+            const Value rawValue      = value - rootBonus;
+            const bool  bonusPromoted = rootBonus > 0 && rawValue <= alpha;
+
+            const i64 ours   = closeCalls[us] - oursAtStart;
+            const i64 theirs = closeCalls[~us] - theirsAtStart;
+            rm.danger        = int((theirs - ours) * 1024 / (theirs + ours + DangerPrior));
+            rm.events        = theirs + ours;
+
             u64 N      = nodes - nodeCount;
             u64 E_prev = std::max(u64(1), rm.effort - N);
 
@@ -1474,15 +1546,15 @@ moves_loop:  // When in check, search starts here
                                      / (N * ChiDenominator + ChiNumerator * E_prev),
                                    MinWeight, MaxWeight);
             u64 w_mss = std::min(w, u64(16));
-            i64 v2    = i64(value) * std::abs(value);
+            i64 v2    = i64(rawValue) * std::abs(rawValue);
 
             if (rm.averageScore == -VALUE_INFINITE)
-                rm.averageScore = value;
+                rm.averageScore = rawValue;
             else
-                rm.averageScore = Value((value * w + rm.averageScore * (Scale - w)) / Scale);
+                rm.averageScore = Value((rawValue * w + rm.averageScore * (Scale - w)) / Scale);
 
             if (rm.meanSquaredScore == -VALUE_INFINITE * VALUE_INFINITE)
-                rm.meanSquaredScore = value * std::abs(value);
+                rm.meanSquaredScore = rawValue * std::abs(rawValue);
             else
                 rm.meanSquaredScore =
                   Value((v2 * w_mss + int64_t(rm.meanSquaredScore) * (Scale - w_mss)) / Scale);
@@ -1490,7 +1562,8 @@ moves_loop:  // When in check, search starts here
             // PV move or new best move?
             if (moveCount == 1 || value > alpha)
             {
-                rm.score = rm.uciScore = value;
+                rm.score = rm.uciScore = rawValue;
+                rm.sortBonus           = rootBonus;
                 rm.selDepth            = selDepth;
                 rm.unset_inexact();
 
@@ -1515,14 +1588,17 @@ moves_loop:  // When in check, search starts here
                 // We record how often the best move has been changed in each iteration.
                 // This information is used for time management. In MultiPV mode,
                 // we must take care to only do this for the first PV line.
-                if (moveCount > 1 && !pvIdx)
+                if (moveCount > 1 && !pvIdx && !bonusPromoted)
                     ++bestMoveChanges;
             }
             else
+            {
                 // All other moves but the PV are set to the lowest value: this
                 // is not a problem when sorting because the sort is stable and the
                 // move position in the list is preserved -- just the PV is pushed up.
-                rm.score = -VALUE_INFINITE;
+                rm.score     = -VALUE_INFINITE;
+                rm.sortBonus = 0;
+            }
         }
 
         // If we have an alternative move equal in value to the current bestmove,
