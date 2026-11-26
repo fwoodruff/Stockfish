@@ -739,6 +739,8 @@ Value Search::Worker::search(
     // Limit the depth if extensions made it too large
     depth = std::min(depth, MAX_PLY - 1);
 
+    const u64 nodesAtEntry = nodes;
+
     // Check if we have an upcoming move that draws by repetition
     if (!rootNode && alpha < VALUE_DRAW && pos.upcoming_repetition(ss->ply))
     {
@@ -1648,9 +1650,11 @@ moves_loop:  // When in check, search starts here
     if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
         && (bestValue > ss->staticEval) == bool(bestMove))
     {
-        auto bonus =
-          std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 18) / 128,
-                     -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
+        // Weight by depth plus the subtree size: log2 of its nodes runs at about
+        // 1 + depth / 2, so bigger subtrees than usual for the depth count more
+        const int effort = std::max(1, depth + 2 * int(msb(nodes - nodesAtEntry + 1)) - 2);
+        auto bonus = std::clamp(int(bestValue - ss->staticEval) * effort * (bestMove ? 6 : 9) / 128,
+                                -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
         update_correction_history(pos, ss, *this, 1061 * bonus / 1024);
     }
 
