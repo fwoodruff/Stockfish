@@ -148,7 +148,9 @@ struct RootMove {
     bool operator==(const Move& m) const { return pv[0] == m; }
     // Sort in descending order
     bool operator<(const RootMove& m) const {
-        return m.score != score ? m.score < score : m.previousScore < previousScore;
+        return m.score + m.sortBonus != score + sortBonus
+               ? m.score + m.sortBonus < score + sortBonus
+               : m.previousScore < previousScore;
     }
 
     u64         effort           = 0;
@@ -162,6 +164,8 @@ struct RootMove {
     bool        previousScoreExact = false;
     int         selDepth           = 0;
     int         tbRank             = 0;
+    int         lean               = 0;
+    Value       sortBonus          = 0;
     Value       tbScore;
     RootPVMoves pv, previousPV;
 };
@@ -373,6 +377,8 @@ class Worker {
 
     usize              pvIdx, pvLast;
     RelaxedAtomic<u64> nodes, tbHits, bestMoveChanges;
+    i64                scrutinyKeep = 0, scrutinyCut = 0;
+    bool               rootScrutiny = false;
     int                selDepth, nmpMinPly;
 
     Position  rootPos;
