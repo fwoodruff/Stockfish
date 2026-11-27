@@ -373,6 +373,7 @@ class Worker {
 
     usize              pvIdx, pvLast;
     RelaxedAtomic<u64> nodes, tbHits, bestMoveChanges;
+    u64                hardness = 0;
     int                selDepth, nmpMinPly;
 
     Position  rootPos;

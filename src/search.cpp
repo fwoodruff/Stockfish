@@ -739,6 +739,8 @@ Value Search::Worker::search(
     // Limit the depth if extensions made it too large
     depth = std::min(depth, MAX_PLY - 1);
 
+    const u64 hardnessAtEntry = hardness;
+
     // Check if we have an upcoming move that draws by repetition
     if (!rootNode && alpha < VALUE_DRAW && pos.upcoming_repetition(ss->ply))
     {
@@ -1404,7 +1406,10 @@ moves_loop:  // When in check, search starts here
                 newDepth += doDeeperSearch - doShallowerSearch;
 
                 if (newDepth > d)
+                {
+                    ++hardness;
                     value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
+                }
 
                 // Post LMR continuation history updates
                 update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
@@ -1545,6 +1550,8 @@ moves_loop:  // When in check, search starts here
 
                 if (value >= beta)
                 {
+                    hardness += moveCount - 1;
+
                     // (*Scaler) Infrequent and small updates scale well
                     ss->cutoffCnt += (extension < 2) || PvNode;
                     assert(value >= beta);  // Fail high
@@ -1648,8 +1655,15 @@ moves_loop:  // When in check, search starts here
     if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
         && (bestValue > ss->staticEval) == bool(bestMove))
     {
-        auto bonus =
-          std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 18) / 128,
+        // Weight by depth, more when the subtree was harder to settle than usual for its
+        // depth (re-searches after reduced searches failed high, and cutoffs found late),
+        // less when easier. In eighths, log2 of that hardness runs at about
+        // min((depth^2 + 12) / 6, 18).
+        const int hard   = 8 * int(msb(hardness - hardnessAtEntry + 1));
+        const int usual  = std::min((depth * depth + 12) / 6, 18);
+        const int effort = std::max(1, depth + (hard - usual) / 4);
+        auto      bonus =
+          std::clamp(int(bestValue - ss->staticEval) * effort * (bestMove ? 34 : 50) / 256,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
         update_correction_history(pos, ss, *this, 1061 * bonus / 1024);
     }
