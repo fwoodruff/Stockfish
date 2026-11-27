@@ -54,6 +54,9 @@ class MovePicker {
     Move next_move();
     void skip_quiet_moves();
 
+    // Material a move threatens beyond its own capture, see Position::tactic_gain()
+    Value tactic_gain(Move m) const;
+
    private:
     template<typename Pred>
     Move select(Pred);
@@ -75,6 +78,10 @@ class MovePicker {
     int                          ply;
     bool                         skipQuiets = false;
     ExtMove                      moves[MAX_MOVES];
+
+    // Squares where tactics can occur, computed on first use
+    mutable TacticMasks tactics;
+    mutable bool        tacticsBuilt = false;
 };
 
 }  // namespace Stockfish

@@ -622,6 +622,47 @@ void Position::compute_threats() const {
 }
 
 
+// Computes the squares where the shapes of tactic_gain() can occur (see TacticMasks)
+TacticMasks Position::tactic_masks() const {
+
+    const Color us = sideToMove, them = ~sideToMove;
+    TacticMasks masks{};
+
+    Bitboard once = 0, twice = 0;
+    for (Bitboard targets = pieces(them, ROOK, QUEEN, KING); targets;)
+    {
+        const Bitboard a = attacks_bb(KNIGHT, pop_lsb(targets));
+        twice |= once & a;
+        once |= a;
+    }
+    masks.forks = pieces(us, KNIGHT) ? twice & ~threats_by(PAWN) & ~pieces(us) : 0;
+
+    if (pieces(them, QUEEN))
+    {
+        const Square q = lsb(pieces(them, QUEEN));
+        Bitboard     snipers =
+          (attacks_bb(ROOK, q) & pieces(us, ROOK)) | (attacks_bb(BISHOP, q) & pieces(us, BISHOP));
+        while (snipers)
+        {
+            const Bitboard between = between_bb(pop_lsb(snipers), q) & ~square_bb(q) & pieces();
+            if (between && !more_than_one(between))
+                (between & pieces(us) ? masks.queenBlockers : masks.queenPinned) |= between;
+        }
+    }
+
+    const Bitboard pinned = blockers_for_king(them) & pieces(them);
+    for (Bitboard targets = pieces(them) & ~pieces(PAWN, KING); targets;)
+    {
+        const Bitboard attackers = attackers_to(pop_lsb(targets));
+        const Bitboard defenders = attackers & pieces(them) & ~pinned;
+        if ((attackers & pieces(us)) && defenders && !more_than_one(defenders))
+            masks.defenders |= defenders;
+    }
+
+    return masks;
+}
+
+
 // Computes the hash keys of the position, and other
 // data that once computed is updated incrementally as moves are made.
 // The function is only used when a new position is set up

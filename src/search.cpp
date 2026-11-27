@@ -1165,6 +1165,15 @@ moves_loop:  // When in check, search starts here
         movedPiece = pos.moved_piece(move);
         givesCheck = pos.gives_check(move);
 
+        // Material the move threatens beyond its own capture, computed only when a
+        // pruning step is about to discard the move
+        Value      tacticGainCache = VALUE_NONE;
+        const auto tacticGain      = [&] {
+            if (tacticGainCache == VALUE_NONE)
+                tacticGainCache = mp.tactic_gain(move);
+            return tacticGainCache;
+        };
+
         // Calculate new depth for this move
         newDepth = depth - 1;
 
@@ -1201,7 +1210,9 @@ moves_loop:  // When in check, search starts here
                     Value futilityValue = ss->staticEval + 234 + 247 * lmrDepth
                                         + PieceValue[capturedPiece] + 134 * captHist / 1024;
 
-                    if (futilityValue <= alpha)
+                    if (futilityValue <= alpha
+                        && (futilityValue + pos.max_tactic_gain() <= alpha
+                            || futilityValue + tacticGain() <= alpha))
                         continue;
                 }
 
@@ -1209,7 +1220,7 @@ moves_loop:  // When in check, search starts here
                 // Avoid pruning sacrifices of our last piece for stalemate.
                 int margin = 177 * depth + captHist * 34 / 1024;
                 if ((alpha >= VALUE_DRAW || pos.non_pawn_material(us) != PieceValue[movedPiece])
-                    && !pos.see_ge(move, -margin))
+                    && !pos.see_ge(move, -margin) && !pos.see_ge(move, -tacticGain()))
                     continue;
             }
             else if (!ss->followPV || !PvNode)
@@ -1219,7 +1230,7 @@ moves_loop:  // When in check, search starts here
                             + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
 
                 // Continuation history based pruning
-                if (history < -4136 * depth)
+                if (history < -4136 * depth && !tacticGain())
                     continue;
 
                 history += 69 * mainHistory[us][move.raw()] / 32;
@@ -1232,7 +1243,9 @@ moves_loop:  // When in check, search starts here
 
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning scales well
-                if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha)
+                if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha
+                    && (futilityValue + pos.max_tactic_gain() <= alpha
+                        || futilityValue + tacticGain() <= alpha))
                 {
                     if (bestValue <= futilityValue && !is_win(futilityValue))
                         bestValue = futilityValue;
@@ -1241,8 +1254,9 @@ moves_loop:  // When in check, search starts here
 
                 lmrDepth = std::max(lmrDepth, 0);
 
-                // Prune moves with negative SEE
-                if (!pos.see_ge(move, -23 * lmrDepth * lmrDepth))
+                // Prune moves with negative SEE, unless what they threaten outweighs it
+                if (!pos.see_ge(move, -23 * lmrDepth * lmrDepth)
+                    && !pos.see_ge(move, -tacticGain()))
                     continue;
             }
         }
@@ -1796,27 +1810,39 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
         moveCount++;
 
+        // Material the move threatens beyond its own capture, computed only when a
+        // pruning step is about to discard the move
+        Value      tacticGainCache = VALUE_NONE;
+        const auto tacticGain      = [&] {
+            if (tacticGainCache == VALUE_NONE)
+                tacticGainCache = mp.tactic_gain(move);
+            return tacticGainCache;
+        };
+
         // Step 6. Pruning
         if (!is_loss(bestValue))
         {
             // Futility pruning and moveCount pruning
             if (!givesCheck && move.to_sq() != prevSq && !is_loss(futilityBase))
             {
-                if (moveCount > 2)
+                if (moveCount > 2 && !tacticGain())
                     continue;
 
                 Value futilityValue = futilityBase + PieceValue[pos.piece_on(move.to_sq())];
 
-                // If static eval + value of piece we are going to capture is
-                // much lower than alpha, we can prune this move.
-                if (futilityValue <= alpha)
+                // If static eval + value of piece we are going to capture (and of what
+                // the move threatens beyond it) is much lower than alpha, we can prune
+                if (futilityValue <= alpha
+                    && (futilityValue + pos.max_tactic_gain() <= alpha
+                        || futilityValue + tacticGain() <= alpha))
                 {
                     bestValue = std::max(bestValue, futilityValue);
                     continue;
                 }
 
                 // If static exchange evaluation is low enough, we can prune
-                if (!pos.see_ge(move, alpha - futilityBase))
+                if (!pos.see_ge(move, alpha - futilityBase)
+                    && !(tacticGain() && pos.see_ge(move, alpha - futilityBase - tacticGain())))
                 {
                     bestValue = std::max(bestValue, std::min(alpha, futilityBase));
                     continue;
@@ -1827,8 +1853,9 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             if (!capture)
                 continue;
 
-            // Do not search moves with bad enough SEE values
-            if (!pos.see_ge(move, -74))
+            // Do not search moves with bad enough SEE values, unless what they threaten
+            // beyond the exchange outweighs the loss
+            if (!pos.see_ge(move, -74) && !pos.see_ge(move, -tacticGain()))
                 continue;
         }
 

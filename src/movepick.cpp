@@ -361,10 +361,35 @@ dispatch:
     }
 }
 
+// The material a move threatens beyond its own capture (see Position::tactic_gain()),
+// with the squares where such tactics can occur computed once per node, on first use
+Value MovePicker::tactic_gain(Move m) const {
+    if (!tacticsBuilt)
+    {
+        tactics      = pos.tactic_masks();
+        tacticsBuilt = true;
+    }
+    return pos.tactic_gain(m, tactics);
+}
+
 void MovePicker::skip_quiet_moves() {
+    if (skipQuiets)
+        return;
+
     skipQuiets = true;
     if (stage == BAD_MOVES || stage == GOOD_QUIET)
-        endCur = endBadMoves = endBadCaptures;  // discards current-stage and bad quiet moves
+    {
+        // Discards the remaining quiet moves, except those that set up a tactic
+        ExtMove* keep = std::max(stage == BAD_MOVES ? cur : moves, endBadCaptures);
+        for (ExtMove* m = keep; m < endBadMoves; ++m)
+            if (tactic_gain(*m) > 0)
+                *keep++ = *m;
+        if (stage == GOOD_QUIET)
+            for (ExtMove* m = cur; m < endCur; ++m)
+                if (tactic_gain(*m) > 0)
+                    *keep++ = *m;
+        endCur = endBadMoves = keep;
+    }
 }
 
 }  // namespace Stockfish

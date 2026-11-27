@@ -40,6 +40,13 @@ struct SharedHistories;
 // its previous state when we retract a move. Whenever a move is made on the
 // board (by calling Position::do_move), a StateInfo object must be passed.
 
+// The squares where the shapes of Position::tactic_gain() can occur: fork squares for our
+// knights, our pieces whose move uncovers an attack on their queen, their pieces pinned to
+// their queen, and their pieces that are the only defender of a piece we attack
+struct TacticMasks {
+    Bitboard forks, queenBlockers, queenPinned, defenders;
+};
+
 struct StateInfo {
 
     // Copied when making a move
@@ -129,6 +136,12 @@ class Position {
     bool  gives_check(Move m) const;
     Piece moved_piece(Move m) const;
     Piece captured_piece() const;
+
+    // Cheap tactical shapes
+    TacticMasks tactic_masks() const;
+    Value       tactic_gain(Move m, const TacticMasks& masks) const;
+    Value       sole_defender_gain(Move m) const;
+    Value       max_tactic_gain() const;
 
     // Doing and undoing moves
     void do_move(Move m);
@@ -320,6 +333,124 @@ inline Key Position::adjust_key50(Key k) const {
 inline Key Position::pawn_key() const { return st->pawnKey ^ sideToMove; }
 
 inline Key Position::material_key() const { return st->materialKey; }
+
+// For a capture that takes the only unpinned defender of enemy pieces (not pawns or
+// the king) that we also attack with an unpinned piece, the value of the most valuable
+// piece left hanging, unless their cheapest recapture would defend it again
+inline Value Position::sole_defender_gain(Move m) const {
+    const Square to     = m.to_sq();
+    const Piece  victim = piece_on(to);
+    if (victim == NO_PIECE)
+        return VALUE_ZERO;
+
+    const Color    us = sideToMove, them = ~sideToMove;
+    const Bitboard guarded =
+      (type_of(victim) == PAWN ? Attacks::attacks_bb(PAWN, to, them)
+                               : Attacks::attacks_bb(type_of(victim), to, pieces()))
+      & pieces(them) & ~pieces(PAWN, KING);
+    if (!guarded)
+        return VALUE_ZERO;
+
+    const Bitboard theirPinned = blockers_for_king(them) & pieces(them);
+    const Bitboard ourAttackers =
+      pieces(us) & ~(blockers_for_king(us) & pieces(us)) & ~square_bb(m.from_sq());
+
+    // The squares their cheapest recapturing piece would defend from the capture square
+    const Bitboard recapturers    = attackers_to(to) & pieces(them);
+    Bitboard       recaptureCover = 0;
+    for (int pt = PAWN; pt <= KING; ++pt)
+        if (recapturers & pieces(PieceType(pt)))
+        {
+            recaptureCover = pt == PAWN ? Attacks::attacks_bb(PAWN, to, them)
+                                        : Attacks::attacks_bb(PieceType(pt), to, pieces());
+            break;
+        }
+
+    Value gain = VALUE_ZERO;
+    for (Bitboard b = guarded & ~recaptureCover; b;)
+    {
+        const Square   s         = pop_lsb(b);
+        const Bitboard attackers = attackers_to(s);
+        if ((attackers & ourAttackers)
+            && (attackers & pieces(them) & ~theirPinned) == square_bb(to))
+            gain = std::max(gain, PieceValue[piece_on(s)]);
+    }
+    return gain;
+}
+
+// Material a move threatens to win beyond what it captures, from cheap tactical shapes
+// that the pruning rules would otherwise not see: taking the only defender of a piece we
+// attack, knight forks, discovered attacks on their queen and attacks on a piece pinned
+// to it. Every pruning step that consults this sees all of them. The squares where these
+// shapes can occur come from tactic_masks().
+inline Value Position::tactic_gain(Move m, const TacticMasks& masks) const {
+    if (!(masks.forks | masks.queenBlockers | masks.queenPinned | masks.defenders))
+        return VALUE_ZERO;
+
+    const Color     us = sideToMove, them = ~sideToMove;
+    const Square    from = m.from_sq(), to = m.to_sq();
+    const Piece     pc = moved_piece(m);
+    const PieceType pt = type_of(pc);
+
+    Value gain = masks.defenders & to ? sole_defender_gain(m) : VALUE_ZERO;
+
+    // Knight fork: they save the more valuable piece, and we lose the knight if the
+    // square is defended
+    if (pt == KNIGHT && (masks.forks & to))
+    {
+        Value least = VALUE_INFINITE;
+        for (Bitboard b = Attacks::attacks_bb(KNIGHT, to) & pieces(them, ROOK, QUEEN, KING); b;)
+        {
+            const Square s = pop_lsb(b);
+            least          = std::min(least, type_of(piece_on(s)) == KING ? VALUE_INFINITE
+                                                                          : PieceValue[piece_on(s)]);
+        }
+        gain = std::max(gain, least - (threats_by(ALL_PIECES) & to ? KnightValue : 0));
+    }
+
+    // Lines from our rooks and bishops to their queen with a single piece in between
+    const Bitboard occupied = (pieces() ^ from) | to;
+    const Bitboard attacks =
+      pt == PAWN ? Attacks::attacks_bb(PAWN, to, us) : Attacks::attacks_bb(pt, to, occupied);
+    if ((masks.queenBlockers & from) || (masks.queenPinned & attacks))
+    {
+        const Square q       = lsb(pieces(them, QUEEN));
+        Bitboard     snipers = (Attacks::attacks_bb(ROOK, q) & pieces(us, ROOK))
+                         | (Attacks::attacks_bb(BISHOP, q) & pieces(us, BISHOP));
+        while (snipers)
+        {
+            const Square   s       = pop_lsb(snipers);
+            const Bitboard between = Attacks::between_bb(s, q) & ~square_bb(q) & pieces();
+            if (!between || more_than_one(between) || from == s)
+                continue;
+
+            const Square b = lsb(between);
+            if (color_of(piece_on(b)) == us)
+            {
+                // Discovered attack: our piece leaves the line with a check or a capture,
+                // so the queen cannot simply step away
+                if (from == b && !(Attacks::line_bb(s, q) & to) && (capture(m) || gives_check(m)))
+                    gain = std::max(gain, QueenValue - PieceValue[piece_on(s)]);
+            }
+            // Their piece is pinned to the queen: attacking it with a cheaper piece wins
+            // material
+            else if ((attacks & b) && PieceValue[pc] < PieceValue[piece_on(b)])
+                gain = std::max(gain, PieceValue[piece_on(b)] - PieceValue[pc]);
+        }
+    }
+
+    return gain;
+}
+
+// An upper bound on tactic_gain(): the value of their most valuable piece below the king
+inline Value Position::max_tactic_gain() const {
+    const Color them = ~sideToMove;
+    return pieces(them, QUEEN)  ? QueenValue
+         : pieces(them, ROOK)   ? RookValue
+         : pieces(them, BISHOP) ? BishopValue
+         : pieces(them, KNIGHT) ? KnightValue
+                                : VALUE_ZERO;
+}
 
 inline Key Position::minor_piece_key() const { return st->minorPieceKey ^ sideToMove; }
 
