@@ -739,6 +739,8 @@ Value Search::Worker::search(
     // Limit the depth if extensions made it too large
     depth = std::min(depth, MAX_PLY - 1);
 
+    const u64 expandedAtEntry = expanded;
+
     // Check if we have an upcoming move that draws by repetition
     if (!rootNode && alpha < VALUE_DRAW && pos.upcoming_repetition(ss->ply))
     {
@@ -1124,6 +1126,8 @@ moves_loop:  // When in check, search starts here
     if ((ttData.bound & BOUND_LOWER) && ttData.depth >= depth - 4 && ttData.value >= probCutBeta
         && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value) && !seekMate)
         return probCutBeta;
+
+    ++expanded;
 
     const PieceToHistory* contHist[] = {
       (ss - 1)->continuationHistory, (ss - 2)->continuationHistory, (ss - 3)->continuationHistory,
@@ -1648,8 +1652,16 @@ moves_loop:  // When in check, search starts here
     if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
         && (bestValue > ss->staticEval) == bool(bestMove))
     {
-        auto bonus =
-          std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 18) / 128,
+        // Weight by depth, more when the subtree expanded more main search nodes than usual
+        // for its depth and less when fewer. Unlike a plain node count, this leaves out
+        // quiescence search and nodes settled without a move loop (TT and static cutoffs),
+        // which add no new search evidence. In eighths, log2 of that count runs at about
+        // min(6 + 2 * depth + depth^2 / 10, 38).
+        const int newWork = 8 * int(msb(expanded - expandedAtEntry + 1));
+        const int usual   = std::min(6 + 2 * depth + depth * depth / 10, 38);
+        const int effort  = std::max(1, depth + (newWork - usual) / 4);
+        auto      bonus =
+          std::clamp(int(bestValue - ss->staticEval) * effort * (bestMove ? 35 : 52) / 256,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
         update_correction_history(pos, ss, *this, 1061 * bonus / 1024);
     }
