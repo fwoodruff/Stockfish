@@ -931,6 +931,17 @@ Value Search::Worker::search(
         }
     }
 
+    // Step 6b. A TT entry up to two plies shallower than Step 6 accepts can still
+    // produce a cutoff when its value clears beta by a margin per missing ply, widened
+    // by the size of the eval correction here (a sign of how unreliable evals are)
+    const int ttShortfall = depth - ttData.depth + (ttData.value > beta);
+    if (!PvNode && !excludedMove && is_valid(ttData.value) && !is_decisive(ttData.value)
+        && ttShortfall >= 1 && ttShortfall <= 2 && pos.rule50_count() < 96
+        && (ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))
+        && (cutNode == (ttData.value >= beta) || depth > 4)
+        && std::abs(ttData.value - beta) >= 160 * ttShortfall + std::abs(correctionValue) / 131072)
+        return ttData.value;
+
     // Step 7. Tablebases probe
     if (!rootNode && !excludedMove && tbConfig.cardinality)
     {
