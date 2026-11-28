@@ -159,6 +159,7 @@ struct CorrectionBundle {
     StatsEntry<T, D, true> minor;
     StatsEntry<T, D, true> nonPawnWhite;
     StatsEntry<T, D, true> nonPawnBlack;
+    StatsEntry<T, D, true> lateCutoff;  // How late cutoffs come, indexed by pawn structure
 
     void fill(T val) {
         pawn[0]      = val;
@@ -166,6 +167,7 @@ struct CorrectionBundle {
         minor        = val;
         nonPawnWhite = val;
         nonPawnBlack = val;
+        lateCutoff   = 0;
     }
 };
 

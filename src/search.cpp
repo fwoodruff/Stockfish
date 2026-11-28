@@ -815,6 +815,7 @@ Value Search::Worker::search(
     (ss + 1)->priorNMPFailHigh = 0;
 
     const auto correctionValue = correction_value(*this, pos, ss);
+    const int  lateCutoff      = sharedHistory.pawn_correction_entry(pos).lateCutoff;
 
     // Step 4. Transposition table lookup
     excludedMove                   = ss->excludedMove;
@@ -1182,8 +1183,9 @@ moves_loop:  // When in check, search starts here
         // Depth conditions are important for mate finding.
         if (!rootNode && pos.non_pawn_material(us) && !is_loss(bestValue))
         {
-            // Skip quiet moves if movecount exceeds our threshold
-            if (moveCount >= (3 + depth * depth) / (2 - improving))
+            // Skip quiet moves if movecount exceeds our threshold, which is higher in pawn
+            // structures where cutoffs tend to come late for the side to move
+            if (moveCount >= (3 + depth * depth) / (2 - improving) * (2048 + lateCutoff) / 2048)
                 mp.skip_quiet_moves();
 
             // Reduced depth of the next LMR search
@@ -1338,6 +1340,10 @@ moves_loop:  // When in check, search starts here
         r += 696;
 
         r -= moveCount * 70;
+
+        // Reduce less in pawn structures where cutoffs tend to come late for the side to
+        // move, and more where they tend to come on the first moves
+        r -= lateCutoff / 2;
         r -= std::abs(correctionValue) / 25622;
 
         // Increase reduction for cut nodes
@@ -1548,6 +1554,14 @@ moves_loop:  // When in check, search starts here
 
                 if (value >= beta)
                 {
+                    // Learn how late cutoffs come in this pawn structure, against the
+                    // average (most come on the first move). Only at depths where move
+                    // count pruning rarely cuts the move list short, so that the pruning
+                    // driven by this does not shape what it learns.
+                    if (depth >= 6)
+                        sharedHistory.pawn_correction_entry(pos).lateCutoff
+                          << 32 * std::min(moveCount - 1, 4) - 8;
+
                     // (*Scaler) Infrequent and small updates scale well
                     ss->cutoffCnt += (extension < 2) || PvNode;
                     assert(value >= beta);  // Fail high
