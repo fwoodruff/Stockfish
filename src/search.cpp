@@ -738,6 +738,8 @@ Value Search::Worker::search(
     // Limit the depth if extensions made it too large
     depth = std::min(depth, MAX_PLY - 1);
 
+    const u64 nodesAtEntry = nodes;
+
     // Check if we have an upcoming move that draws by repetition
     if (!rootNode && alpha < VALUE_DRAW && pos.upcoming_repetition(ss->ply))
     {
@@ -815,6 +817,7 @@ Value Search::Worker::search(
     (ss + 1)->priorNMPFailHigh = 0;
 
     const auto correctionValue = correction_value(*this, pos, ss);
+    const int  complexity      = sharedHistory.pawn_correction_entry(pos).complexity;
 
     // Step 4. Transposition table lookup
     excludedMove                   = ss->excludedMove;
@@ -1338,6 +1341,10 @@ moves_loop:  // When in check, search starts here
         r += 696;
 
         r -= moveCount * 70;
+
+        // Reduce less where subtrees of this pawn structure tend to be bigger than usual for
+        // their depth, and more where they tend to be smaller
+        r -= complexity / 2;
         r -= std::abs(correctionValue) / 25622;
 
         // Increase reduction for cut nodes
@@ -1645,6 +1652,17 @@ moves_loop:  // When in check, search starts here
                                             : BOUND_UPPER,
                        moveCount != 0 ? depth : std::min(MAX_PLY - 1, depth + 6), bestMove,
                        unadjustedStaticEval, tt.generation());
+
+    // Learn whether subtrees of this pawn structure come out bigger or smaller than usual
+    // for their depth. In sixteenths, log2 of the node count runs at about 17 + 6 * depth,
+    // flattening beyond depth 9.
+    if (depth >= 3 && !excludedMove)
+    {
+        const int size     = 16 * int(msb(nodes - nodesAtEntry + 1));
+        const int expected = depth <= 9 ? 17 + 6 * depth : 71 + 4 * (depth - 9);
+        sharedHistory.pawn_correction_entry(pos).complexity
+          << std::clamp((size - expected) * 2, -128, 128);
+    }
 
     // Adjust correction history if the best move is not a capture and
     // the error direction matches whether we are above/below bounds.
